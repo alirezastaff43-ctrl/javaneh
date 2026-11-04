@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEVELOPMENT_AXES, INTAKE_AXES } from "@/lib/interviewer";
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 function requestBody(overrides: Record<string, unknown> = {}) {
   const axes = INTAKE_AXES;
@@ -43,6 +43,32 @@ function providerResponse(content: string) {
   return Response.json({
     choices: [{ message: { content } }],
   });
+}
+
+describe("mentor explanation validation", () => {
+  beforeEach(() => {
+    vi.stubEnv("AVALAI_API_KEY", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GOOGLE_API_KEY", "");
+    vi.stubEnv("AI_API_KEY", "");
+    vi.stubEnv("AI_BASE_URL", "");
+    vi.stubEnv("AI_MODEL", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("announces demo mode without exposing provider configuration", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    const response = await GET();
+    const result = await response.json();
+
+    expect(result).toEqual({ mode: "demo" });
+    expect(JSON.stringify(result)).not.toContain("test-openrouter-key");
+  });
 
   it("uses a safe Persian explanation when the provider omits it", async () => {
     const decision = validDecision();
@@ -84,7 +110,7 @@ function providerResponse(content: string) {
     expect(result.questionContext).toContain("دانسته‌ها");
     expect(result.questionContext).not.toMatch(/[؟?]/u);
   });
-}
+});
 
 async function post(value: unknown) {
   return POST(
@@ -139,11 +165,168 @@ describe("adaptive interview route", () => {
     expect(providerRequest.response_format).toEqual({ type: "json_object" });
     const userContext = JSON.parse(providerRequest.messages[1].content);
     expect(userContext.answer).toBe(requestBody().answer);
+    expect(
+      userContext.history.some(
+        (item: { answer: string }) => item.answer === requestBody().answer,
+      ),
+    ).toBe(false);
     expect(userContext.history).toEqual(requestBody().history);
     expect(userContext.responseLanguage).toBe("Persian");
     expect(userContext.eligibleCoveredSections).toEqual(requestBody().remainingSections);
     expect(userContext.sectionFocusTerms["What is known"]).toContain("علت");
     expect(userContext).not.toHaveProperty("suggestedNextQuestion");
+  });
+
+  it("ignores extra provider fields while validating the required decision fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(
+        JSON.stringify({
+          ...validDecision(),
+          reasoning: "Internal provider metadata",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.nextQuestion).toBe(validDecision().nextQuestion);
+    expect(result).not.toHaveProperty("reasoning");
+  });
+
+  it("retries once when a provider decision is invalid and returns only a valid decision", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        providerResponse(
+          JSON.stringify({ ...validDecision(), nextQuestion: null }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        providerResponse(JSON.stringify(validDecision())),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await post(requestBody());
+    const result = await response.json();
+    const retryRequest = JSON.parse(fetchMock.mock.calls[1][1].body);
+
+    expect(response.status).toBe(200);
+    expect(result.nextQuestion).toBe(validDecision().nextQuestion);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(retryRequest.messages[1].content).toContain(
+      "اگر مرحله کامل نیست",
+    );
+    expect(
+      JSON.parse(retryRequest.messages.at(-1).content).answer,
+    ).toBe(requestBody().answer);
+  });
+
+  it("allows a supported later axis when preceding axes are covered", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(
+        JSON.stringify({
+          ...validDecision(),
+          coveredSections: [INTAKE_AXES[2].section],
+          nextSection: INTAKE_AXES[3].section,
+          nextQuestion: "دوست داری چه راهکاری را برای این مسئله امتحان کنی؟",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.coveredSections).toEqual([INTAKE_AXES[2].section]);
+    expect(result.nextSection).toBe(INTAKE_AXES[3].section);
+  });
+
+  it("sends the bounded prior intake history during idea development", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(
+        JSON.stringify({
+          mentorMessage: "نوشتی که می‌خواهی این موضوع را بیشتر بررسی کنی.",
+          stageComplete: false,
+          coveredSections: [],
+          nextSection: DEVELOPMENT_AXES[1].section,
+          nextQuestion: DEVELOPMENT_AXES[1].question,
+          questionContext:
+            "شنیدن دیدگاه‌های افراد مرتبط کمک می‌کند راهکار با تجربهٔ آن‌ها هماهنگ باشد.",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const history = INTAKE_AXES.map((axis, index) => ({
+      stage: "initial",
+      section: axis.section,
+      question: axis.question,
+      answer: `پاسخ ثبت اولیهٔ ${index + 1}`,
+      createdAt: `2026-01-0${index + 1}T00:00:00.000Z`,
+    }));
+    const response = await post(
+      requestBody({
+        stage: "development",
+        section: DEVELOPMENT_AXES[0].section,
+        index: 0,
+        question: DEVELOPMENT_AXES[0].question,
+        answer: "هنوز نمونه‌ای در ذهنم نیست.",
+        answeredSections: [DEVELOPMENT_AXES[0].section],
+        remainingSections: DEVELOPMENT_AXES.slice(1).map((axis) => axis.section),
+        history,
+      }),
+    );
+    const result = await response.json();
+    const userContext = JSON.parse(fetchMock.mock.calls[0][1].body).messages[1]
+      .content;
+    const context = JSON.parse(userContext);
+
+    expect(response.status).toBe(200);
+    expect(context.history).toHaveLength(INTAKE_AXES.length);
+    expect(context.history.map((item: { section: string }) => item.section)).toEqual(
+      INTAKE_AXES.map((axis) => axis.section),
+    );
+    expect(context.answer).toBe("هنوز نمونه‌ای در ذهنم نیست.");
+    expect(result.nextSection).toBe(DEVELOPMENT_AXES[1].section);
+  });
+
+  it("accepts the maximum relevant history within the bounded request size", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.stubEnv("AI_API_KEY", "");
+    const history = [
+      ...INTAKE_AXES.map((axis) => ({ axis, stage: "initial" })),
+      ...DEVELOPMENT_AXES.slice(0, -1).map((axis) => ({
+        axis,
+        stage: "development",
+      })),
+    ].map(({ axis, stage }, index) => ({
+      stage,
+      section: axis.section,
+      question: "ا".repeat(200),
+      answer: "ا".repeat(200),
+      createdAt: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+    }));
+    const value = requestBody({
+      seed: "ا".repeat(1200),
+      stage: "development",
+      section: DEVELOPMENT_AXES[9].section,
+      index: 9,
+      question: "ا".repeat(600),
+      answer: "ا".repeat(1500),
+      answeredSections: DEVELOPMENT_AXES.map((axis) => axis.section),
+      remainingSections: [],
+      history,
+    });
+    const serialized = JSON.stringify(value);
+
+    const bodySize = new TextEncoder().encode(serialized).byteLength;
+    expect(bodySize).toBeLessThan(36_000);
+    const response = await post(value);
+
+    expect(response.status).toBe(200);
   });
 
   it("orders the bounded history and redacts identifiers before sending context", async () => {
@@ -156,7 +339,7 @@ describe("adaptive interview route", () => {
           coveredSections: [],
           nextSection: axes[3].section,
           nextQuestion:
-            "افراد از نخستین برخورد تا ایجاد تغییر، چه تجربه‌ای خواهند داشت؟",
+            "راهکارت برای افراد درگیر چه تجربه‌ای می‌سازد؟",
           questionContext:
             "روشن‌شدن تجربهٔ افراد از راهکار کمک می‌کند بفهمیم تغییر موردنظر در عمل چگونه رخ می‌دهد.",
         }),
@@ -427,6 +610,13 @@ describe("adaptive interview route", () => {
       JSON.stringify({ ...validDecision(), nextQuestion: "What did you notice?" }),
     ],
     [
+      "non-Persian reflection",
+      JSON.stringify({
+        ...validDecision(),
+        mentorMessage: "Thank you for sharing that.",
+      }),
+    ],
+    [
       "empty question",
       JSON.stringify({ ...validDecision(), nextQuestion: "" }),
     ],
@@ -442,6 +632,14 @@ describe("adaptive interview route", () => {
       JSON.stringify({
         ...validDecision(),
         nextQuestion: "What might still be unclear about why this happens?",
+      }),
+    ],
+    [
+      "multi-part question",
+      JSON.stringify({
+        ...validDecision(),
+        nextQuestion:
+          "به نظرت چه چیزی باعث ادامه شده و چه کاری را امتحان کرده‌اید؟",
       }),
     ],
   ])("rejects provider output with %s", async (_case, content) => {

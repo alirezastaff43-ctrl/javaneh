@@ -842,6 +842,19 @@ input:focus {
   font-weight: 650;
 }
 
+.mentor-mode-badge {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding-inline: 9px;
+  border: 1px solid rgb(114 198 183 / 32%);
+  border-radius: 999px;
+  color: #b7dcd3;
+  background: rgb(114 198 183 / 8%);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .mentor-avatar {
   width: 30px;
   height: 30px;

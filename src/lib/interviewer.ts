@@ -1,4 +1,5 @@
 import { isPersianText } from "./locale";
+import { redactPersonalData } from "./privacy";
 
 export type InterviewStage = "initial" | "development";
 
@@ -6,32 +7,32 @@ export const INTAKE_AXES = [
   {
     section: "The problem",
     label: "مسئله",
-    question: "چه مسئلهٔ مشخصی توجهت را جلب کرده و این مسئله کجا یا چه زمانی رخ می‌دهد؟",
-    focusTerms: ["مسئله", "کجا", "زمانی"],
+    question: "کدام بخش از این مسئله را خودت دیده‌ای؟",
+    focusTerms: ["مسئله", "دیده‌ای"],
   },
   {
     section: "People affected",
     label: "افراد درگیر",
-    question: "چه کسانی از این مسئله تأثیر می‌گیرند و این موضوع چه اثری بر زندگی روزمره‌شان دارد؟",
-    focusTerms: ["چه کسانی", "تأثیر", "روزمره"],
+    question: "این مسئله بیشتر روی زندگی چه کسانی اثر می‌گذارد؟",
+    focusTerms: ["چه کسانی", "اثر"],
   },
   {
     section: "What is known",
     label: "دانسته‌ها",
-    question: "دربارهٔ علت این مسئله، کارهایی که دیگران امتحان کرده‌اند و چیزهایی که هنوز روشن نیست چه می‌دانی؟",
-    focusTerms: ["علت", "امتحان", "روشن نیست"],
+    question: "به نظرت چه چیزی باعث ادامهٔ این مسئله شده است؟",
+    focusTerms: ["چه چیزی", "ادامه", "علت"],
   },
   {
     section: "Your idea",
     label: "ایدهٔ تو",
-    question: "دوست داری چه راهکاری را امتحان کنی و فکر می‌کنی چطور می‌تواند کمک‌کننده باشد؟",
-    focusTerms: ["راهکار", "امتحان", "کمک"],
+    question: "دوست داری برای روبه‌روشدن با این مسئله چه راهکاری را امتحان کنی؟",
+    focusTerms: ["راهکار", "امتحان"],
   },
   {
     section: "Your connection",
     label: "ارتباط تو با مسئله",
-    question: "چه چیزی باعث شده شخصاً به این مسئله علاقه‌مند شوی یا با آن ارتباط داشته باشی؟",
-    focusTerms: ["شخصاً", "علاقه‌مند", "ارتباط"],
+    question: "چه چیزی باعث شده به این مسئله توجه کنی؟",
+    focusTerms: ["چه چیزی", "توجه"],
   },
 ] as const;
 
@@ -39,62 +40,62 @@ export const DEVELOPMENT_AXES = [
   {
     section: "Evidence",
     label: "شواهد",
-    question: "می‌توانی نمونه‌ای مشخص بگویی، توضیح بدهی این اتفاق هر چند وقت یک‌بار رخ می‌دهد و بگویی چه چیزی هنوز باید بررسی شود؟",
-    focusTerms: ["نمونه", "چند وقت", "بررسی"],
+    question: "چه نمونه‌ای از این مسئله در ذهنت مانده است؟",
+    focusTerms: ["نمونه"],
   },
   {
     section: "Stakeholders",
     label: "افراد و گروه‌های مرتبط",
-    question: "چه کسانی بهتر است در شکل‌دادن به این ایده مشارکت کنند و ممکن است ناخواسته کسی نادیده گرفته شود یا آسیب ببیند؟",
-    focusTerms: ["چه کسانی", "مشارکت", "آسیب"],
+    question: "چه کسانی باید پیش از طراحی راهکار شنیده شوند؟",
+    focusTerms: ["چه کسانی", "شنیده"],
   },
   {
     section: "Root causes",
     label: "ریشه‌های مسئله",
-    question: "به نظرت چرا این مسئله همچنان ادامه دارد و مردم اکنون برای روبه‌روشدن با آن چه می‌کنند؟",
-    focusTerms: ["چرا", "مسئله", "ادامه"],
+    question: "به نظرت چرا این مسئله همچنان ادامه دارد؟",
+    focusTerms: ["چرا", "ادامه"],
   },
   {
     section: "Solution",
     label: "راهکار",
-    question: "از نخستین برخورد تا تغییری که امیدوار به ایجاد آن هستی، افراد چه تجربه‌ای خواهند داشت؟",
-    focusTerms: ["برخورد", "تغییر", "تجربه"],
+    question: "راهکارت برای افراد درگیر چه تجربه‌ای می‌سازد؟",
+    focusTerms: ["راهکار", "تجربه"],
   },
   {
     section: "Feasibility",
     label: "امکان‌پذیری",
-    question: "به چه مهارت‌ها، مجوزها، همراهان یا منابعی نیاز داری و چه محدودیت‌هایی را باید در نظر بگیری؟",
-    focusTerms: ["مهارت", "منابع", "محدودیت"],
+    question: "چه چیزی می‌تواند اجرای ایده را برایت دشوار کند؟",
+    focusTerms: ["اجرای", "دشوار"],
   },
   {
     section: "Pilot",
     label: "اجرای آزمایشی",
-    question: "کوچک‌ترین آزمون مفیدی که می‌توانی اجرا کنی چیست، با چه کسانی و کجا، تا بفهمی این راهکار مؤثر است یا نه؟",
-    focusTerms: ["آزمون", "چه کسانی", "کجا", "مؤثر"],
+    question: "کوچک‌ترین آزمونی که می‌توانی برای ایده‌ات انجام دهی چیست؟",
+    focusTerms: ["آزمون"],
   },
   {
     section: "Outcomes",
     label: "نتایج",
-    question: "چه تغییر واقع‌بینانه‌ای را می‌توانی به‌زودی ببینی و چطور می‌توانی آن را اندازه‌گیری کنی؟",
-    focusTerms: ["تغییر", "اندازه‌گیری"],
+    question: "چه نشانه‌ای به تو می‌گوید ایده مفید بوده است؟",
+    focusTerms: ["چه نشانه", "مفید"],
   },
   {
     section: "Inclusion and risk",
     label: "مشارکت و خطرها",
-    question: "چه چیزی ممکن است به مشکل بخورد یا مشارکت را دشوار کند و چه اقدام عملی می‌تواند این خطر را کاهش دهد؟",
-    focusTerms: ["خطر", "مشارکت", "دشوار", "کاهش"],
+    question: "چه پیامد ناخواسته‌ای را بهتر است از قبل در نظر بگیریم؟",
+    focusTerms: ["پیامد", "ناخواسته"],
   },
   {
     section: "Delivery",
     label: "اجرا",
-    question: "دو گام نخست چیست، چه کسی می‌تواند مسئولیت آن‌ها را بپذیرد و چه چیزی به ادامهٔ کار کمک می‌کند؟",
-    focusTerms: ["گام", "مسئولیت", "ادامه"],
+    question: "نخستین گامی که می‌توانی برداری چیست؟",
+    focusTerms: ["نخستین گام"],
   },
   {
     section: "Next actions",
     label: "گام‌های بعدی",
-    question: "مهم‌ترین پرسشی که هنوز بی‌پاسخ مانده چیست و چه گام مشخصی کمک می‌کند آن را بررسی کنی؟",
-    focusTerms: ["پرسش", "گام", "بررسی"],
+    question: "کدام پرسش بی‌پاسخ را می‌خواهی اول بررسی کنی؟",
+    focusTerms: ["پرسش", "بررسی"],
   },
 ] as const;
 
@@ -122,6 +123,40 @@ export type InterviewRequest = {
   remainingSections: string[];
   history: InterviewHistoryItem[];
 };
+
+export function developmentOpeningQuestion(
+  seed: string,
+  answers: Array<Pick<InterviewHistoryItem, "section" | "answer">>,
+): { text: string; questionContext: string } {
+  const relevantAnswers = answers.filter(({ section, answer }) =>
+    INTAKE_AXES.some((axis) => axis.section === section) && answer.trim(),
+  );
+  const latestAnswer = relevantAnswers.at(-1)?.answer.trim();
+  const safeAnswer = latestAnswer ? redactPersonalData(latestAnswer) : "";
+  const quote =
+    safeAnswer &&
+    !safeAnswer.includes("[personal information removed]") &&
+    !/[؟?]/u.test(safeAnswer)
+      ? safeAnswer.slice(0, 60)
+      : "";
+  const safeSeed = redactPersonalData(seed.trim());
+  const quoteSeed =
+    !latestAnswer &&
+    safeSeed.length > 0 &&
+    safeSeed.length <= 60 &&
+    !safeSeed.includes("[personal information removed]") &&
+    !/[؟?]/u.test(safeSeed);
+
+  return {
+    text: quote
+      ? `نوشتی «${quote}». در ارتباط با این حرف، چه نمونه‌ای از این مسئله در ذهنت مانده است؟`
+      : quoteSeed
+        ? `با توجه به ایدهٔ آغازینت «${safeSeed}»، چه نمونه‌ای از این مسئله در ذهنت مانده است؟`
+        : "با توجه به توضیحی که دربارهٔ ایده‌ات دادی، چه نمونه‌ای از این مسئله در ذهنت مانده است؟",
+    questionContext:
+      "از گفته‌های ثبت اولیه‌ات شروع می‌کنیم تا مسئله را با یک نمونهٔ واقعی روشن‌تر کنیم؛ اگر نمونه‌ای نداری، می‌توانی بگویی هنوز بررسی نکرده‌ای.",
+  };
+}
 
 export type InterviewDecision = {
   mentorMessage: string;
@@ -159,6 +194,11 @@ export function isValidInterviewQuestion(
     trimmed.length > 600 ||
     !isPersianText(trimmed) ||
     (trimmed.match(/[؟?]/g) ?? []).length !== 1 ||
+    (
+      trimmed.match(
+        /(?<![\p{L}\u200c])(?:چه|چرا|چطور|چگونه|کدام|آیا)(?![\p{L}\u200c])/gu,
+      ) ?? []
+    ).length > 1 ||
     !axis.focusTerms.some((term) =>
       trimmed.toLocaleLowerCase("fa").includes(term),
     )
@@ -179,7 +219,7 @@ export function validateInterviewDecision(
   if (
     typeof result.mentorMessage !== "string" ||
     result.mentorMessage.trim().length === 0 ||
-    result.mentorMessage.length > 120 ||
+    result.mentorMessage.length > 240 ||
     !isPersianText(result.mentorMessage) ||
     typeof result.stageComplete !== "boolean" ||
     !Array.isArray(result.coveredSections) ||
@@ -205,7 +245,8 @@ export function validateInterviewDecision(
 
   if (
     uncoveredSections.length === 0 ||
-    result.nextSection !== uncoveredSections[0] ||
+    typeof result.nextSection !== "string" ||
+    !uncoveredSections.includes(result.nextSection) ||
     typeof result.nextQuestion !== "string" ||
     typeof result.questionContext !== "string" ||
     result.questionContext.trim().length === 0 ||
@@ -216,7 +257,13 @@ export function validateInterviewDecision(
     return false;
 
   const axis = findAxis(result.nextSection, request.stage);
-  if (!axis || result.mentorMessage.length > result.nextQuestion.length)
+  if (!axis) return false;
+  const nextPosition = request.remainingSections.indexOf(result.nextSection);
+  if (
+    request.remainingSections
+      .slice(0, nextPosition)
+      .some((section) => !result.coveredSections?.includes(section))
+  )
     return false;
   return isValidInterviewQuestion(result.nextQuestion, axis, [
     request.question,
@@ -230,7 +277,9 @@ export function createDemoDecision(
   const nextSection = request.remainingSections[0];
   if (!nextSection) {
     return {
-      mentorMessage: "ممنون از همراهی‌ات.",
+      mentorMessage: isPersianText(request.seed)
+        ? `ایدهٔ اولیه‌ات «${request.seed.trim().slice(0, 45)}${request.seed.trim().length > 45 ? "…" : ""}» و پاسخ‌هایت پایهٔ پیشنهاد هستند. حالا متن برای بازبینی آماده است و هر بخش را می‌توانی اصلاح کنی.`
+        : "پیشنهاد بر پایهٔ پاسخ‌هایت آمادهٔ بازبینی است؛ می‌توانی متن را اصلاح کنی.",
       stageComplete: true,
       coveredSections: [],
       nextSection: null,
@@ -258,7 +307,9 @@ export function createDemoDecision(
     .filter(Boolean)
     .join("؛ ");
   return {
-    mentorMessage: "ممنون که این را با من در میان گذاشتی.",
+    mentorMessage: canQuoteAnswer
+      ? `نوشتی «${answerQuote}». اگر برداشتم دقیق نیست، می‌توانی اصلاحم کنی.`
+      : "اگر درست فهمیدم، این نکته برایت مهم است؛ اگر برداشتم دقیق نیست، می‌توانی اصلاحم کنی.",
     stageComplete: false,
     coveredSections: [],
     nextSection,

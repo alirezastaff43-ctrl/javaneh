@@ -57,6 +57,7 @@ import {
 } from "@/lib/domain";
 import {
   axesForStage,
+  developmentOpeningQuestion,
   findAxis,
   questionContextForAxis,
   validateInterviewDecision,
@@ -70,6 +71,7 @@ type Screen =
   | "details"
   | "verify"
   | "intake"
+  | "initial-confirmed"
   | "dashboard"
   | "develop"
   | "review"
@@ -354,6 +356,9 @@ export default function Home() {
   const [mentorMessage, setMentorMessage] = useState(
     "قدم‌به‌قدم همراهت هستم. لازم نیست از همین حالا پاسخ همهٔ پرسش‌ها را بدانی.",
   );
+  const [mentorMode, setMentorMode] = useState<"demo" | "provider" | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [reviewDraft, setReviewDraft] = useState<Record<string, string>>({});
@@ -388,6 +393,33 @@ export default function Home() {
       );
     }
   }, [state, ready]);
+
+  useEffect(() => {
+    if (!ready || (screen !== "intake" && screen !== "develop")) return;
+    let active = true;
+    fetch("/api/mentor", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Mentor mode could not be checked");
+        const payload: unknown = await response.json();
+        if (
+          payload &&
+          typeof payload === "object" &&
+          "mode" in payload &&
+          (payload.mode === "demo" || payload.mode === "provider") &&
+          active
+        )
+          setMentorMode(payload.mode);
+      })
+      .catch(() => {
+        if (active)
+          setFormError(
+            "وضعیت گفت‌وگو مشخص نشد. پاسخ شما پیش از تلاش برای ادامه ذخیره خواهد شد.",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [screen, ready]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -523,6 +555,7 @@ export default function Home() {
       setActiveId(idea.id);
       setDraftAnswer("");
       setReviewDraft({});
+      setMentorMode(null);
       setMentorMessage(
         "ایده‌تان را با همان واژه‌های خودتان و با پرسش‌هایی کاربردی، قدم‌به‌قدم پرورش می‌دهیم.",
       );
@@ -581,6 +614,7 @@ export default function Home() {
     setCode("");
     setDraftAnswer("");
     setReviewDraft({});
+    setMentorMode(null);
     setFormError("");
     setScreen("intake");
   }
@@ -708,14 +742,14 @@ export default function Home() {
             Date.parse(left.answer.createdAt) -
             Date.parse(right.answer.createdAt),
         )
-        .slice(-4)
+        .slice(-14)
         .map(({ answer, axis }) => ({
           stage: intakeQuestions.some((item) => item.section === axis.section)
             ? ("initial" as const)
             : ("development" as const),
           section: answer.section,
-          question: axis.question.slice(0, 300),
-          answer: answer.answer.slice(0, 500),
+          question: answer.question.slice(0, 200),
+          answer: answer.answer.slice(0, 200),
           createdAt: answer.createdAt,
         }));
       const interviewRequest: InterviewRequest = {
@@ -755,12 +789,16 @@ export default function Home() {
         );
         return;
       }
+      const responseMode: "provider" | "demo" | null =
+        payload &&
+        typeof payload === "object" &&
+        "mode" in payload &&
+        (payload.mode === "provider" || payload.mode === "demo")
+          ? payload.mode
+          : null;
       if (
         !response.ok ||
-        !payload ||
-        typeof payload !== "object" ||
-        !("mode" in payload) ||
-        (payload.mode !== "provider" && payload.mode !== "demo") ||
+        responseMode === null ||
         !validateInterviewDecision(payload, interviewRequest)
       ) {
         setMentorMessage("پاسخت ذخیره شد.");
@@ -808,7 +846,8 @@ export default function Home() {
         return;
       }
       announceNewToken(activeIdea, savedFinalIdea);
-      setMentorMessage(decision.mentorMessage.slice(0, 120));
+      setMentorMode(responseMode);
+      setMentorMessage(decision.mentorMessage.slice(0, 240));
       setDraftAnswer("");
       setFormError("");
     } finally {
@@ -834,16 +873,39 @@ export default function Home() {
       "initial-complete",
       5,
     );
-    announceNewToken(activeIdea, updated);
-    updateIdea(updated);
-    setScreen("dashboard");
+    const savedIdea = saveIdeaImmediately(updated);
+    if (!savedIdea) return;
+    announceNewToken(activeIdea, savedIdea);
+    setScreen("initial-confirmed");
   }
 
   function beginDevelopment(idea: Idea) {
     setActiveId(idea.id);
     setDraftAnswer(idea.draftAnswer ?? "");
-    if (idea.status === "initial")
-      updateIdea({ ...idea, status: "in-development", stage: "development" });
+    const shouldCreateOpeningQuestion =
+      (idea.developmentIndex ?? 0) === 0 &&
+      !idea.answers.some((answer) =>
+        developmentQuestions.some((axis) => axis.section === answer.section),
+      ) &&
+      idea.mentorNextQuestion?.stage !== "development";
+    const openingQuestion = shouldCreateOpeningQuestion
+      ? developmentOpeningQuestion(idea.seed, idea.answers)
+      : null;
+    updateIdea({
+      ...idea,
+      status: idea.status === "initial" ? "in-development" : idea.status,
+      stage: "development",
+      ...(openingQuestion
+        ? {
+            mentorNextQuestion: {
+              stage: "development",
+              index: 0,
+              section: developmentQuestions[0].section,
+              ...openingQuestion,
+            },
+          }
+        : {}),
+    });
     setMentorMessage(
       "بیایید ایده‌تان را کاربردی‌تر کنیم و آنچه مشاهده کرده‌اید از مواردی که هنوز باید آزموده شوند جدا کنیم.",
     );
@@ -883,15 +945,29 @@ export default function Home() {
     const fields = createProposal(idea);
     setReviewDraft({ ...fields, ...idea.proposal });
     setActiveId(idea.id);
-    updateIdea({ ...idea, stage: "review" });
+    saveIdeaImmediately({ ...idea, stage: "review" });
     setScreen("review");
   }
 
   function saveProposal(idea: Idea) {
-    updateIdea({
+    saveIdeaImmediately({
       ...idea,
       title: reviewDraft.title?.trim().slice(0, 80) || idea.title,
       proposal: reviewDraft,
+      stage: "review",
+    });
+  }
+
+  function updateProposalField(idea: Idea, key: string, value: string) {
+    const nextDraft = { ...reviewDraft, [key]: value };
+    setReviewDraft(nextDraft);
+    saveIdeaImmediately({
+      ...idea,
+      title:
+        key === "title"
+          ? value.trim().slice(0, 80) || idea.title
+          : idea.title,
+      proposal: { ...idea.proposal, [key]: value },
       stage: "review",
     });
   }
@@ -905,9 +981,10 @@ export default function Home() {
       stage: "review",
     };
     saved = awardToken(saved, "Proposal reviewed", "proposal-review", 5);
-    announceNewToken(activeIdea, saved);
     const updated = mode === "now" ? submitNow(saved) : deferSubmission(saved);
-    updateIdea(updated);
+    const savedIdea = saveIdeaImmediately(updated);
+    if (!savedIdea) return;
+    announceNewToken(activeIdea, savedIdea);
     setScreen(mode === "now" ? "submitted" : "dashboard");
   }
 
@@ -940,7 +1017,12 @@ export default function Home() {
     setActiveId(idea.id);
     if (idea.status === "submitted") setScreen("submitted");
     else if (idea.status === "awaiting-confirmation") beginReview(idea);
-    else if (idea.status === "initial") setScreen("intake");
+    else if (
+      idea.status === "initial" &&
+      (idea.intakeIndex ?? 0) < intakeQuestions.length
+    )
+      setScreen("intake");
+    else if (idea.stage === "review") beginReview(idea);
     else if ((idea.developmentIndex ?? 0) < developmentQuestions.length)
       beginDevelopment(idea);
     else beginReview(idea);
@@ -1013,7 +1095,7 @@ export default function Home() {
 
   return (
     <main
-      className={`app-shell${screen === "home" ? " landing-shell" : screen === "intake" ? " intake-shell" : screen === "dashboard" ? " dashboard-shell" : ["details", "verify", "develop", "review", "submitted"].includes(screen) ? " glass-shell" : ""}`}
+      className={`app-shell${screen === "home" ? " landing-shell" : screen === "intake" ? " intake-shell" : screen === "dashboard" ? " dashboard-shell" : ["details", "verify", "develop", "review", "submitted", "initial-confirmed"].includes(screen) ? " glass-shell" : ""}`}
     >
       <header
         className={`topbar${screen === "home" || screen === "intake" ? " landing-topbar" : ""}`}
@@ -1418,6 +1500,9 @@ export default function Home() {
                   <Lightbulb size={26} strokeWidth={1.8} aria-hidden="true" />
                 </span>
                 <span>گفت‌وگو دربارهٔ ایده</span>
+                {mentorMode === "demo" && (
+                  <span className="mentor-mode-badge">حالت نمایشی</span>
+                )}
                 <span className="intake-start-badge">از اینجا شروع کنید</span>
               </div>
               <div className="mentor-message intake-mentor-message" aria-live="polite">
@@ -1429,7 +1514,7 @@ export default function Home() {
                     <i /> در حال آماده‌کردن پرسش بعدی
                   </span>
                 ) : (
-                  mentorMessage.slice(0, 120)
+                  mentorMessage.slice(0, 240)
                 )}
               </div>
               <div className="question-card">
@@ -1448,7 +1533,7 @@ export default function Home() {
                         {currentQuestion.questionContext}
                       </p>
                     )}
-                    <h2>
+                    <h2 aria-live="polite" aria-atomic="true">
                       {initialIndex < 5
                         ? currentQuestion.question
                         : "خلاصهٔ اولیهٔ ایده آماده است."}
@@ -1706,6 +1791,38 @@ export default function Home() {
                 <p>{labels.localNotice} پاسخ‌ها برای راهنمای هوشمند پردازش می‌شوند و اطلاعات هویتی و شمارهٔ همراه پیش از ارسال حذف می‌شوند.</p>
               </details>
             </aside>
+          </div>
+        </section>
+      )}
+
+      {screen === "initial-confirmed" && activeIdea && (
+        <section className="success-view">
+          <div className="success-icon">
+            <BadgeCheck size={32} aria-hidden="true" />
+          </div>
+          <div className="eyebrow">
+            <span className="eyebrow-line" />
+            ثبت اولیه تأیید شد
+          </div>
+          <h1>
+            ایده‌تان برای ادامه <em>محفوظ است</em>
+          </h1>
+          <p className="success-copy">
+            ثبت اولیهٔ شما کامل است و توسعهٔ بیشتر اختیاری است. می‌توانید همین حالا ادامه دهید یا بعداً از داشبورد برگردید.
+          </p>
+          <div className="submit-actions">
+            <button
+              className="primary-button"
+              onClick={() => beginDevelopment(activeIdea)}
+            >
+              ادامهٔ پرورش ایده <ArrowRight size={17} />
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => setScreen("dashboard")}
+            >
+              بعداً از داشبورد ادامه می‌دهم <House size={17} />
+            </button>
           </div>
         </section>
       )}
@@ -2025,7 +2142,7 @@ export default function Home() {
                         {idea.status === "initial"
                           ? (idea.intakeIndex ?? 0) < 5
                             ? "ادامهٔ ثبت اولیه"
-                            : "بازبینی ثبت اولیه"
+                            : "پرورش بیشتر ایده"
                           : (idea.developmentIndex ?? 0) < 10
                             ? "ادامهٔ توسعهٔ ایده"
                             : "ادامهٔ مسیر ایده"}
@@ -2143,6 +2260,9 @@ export default function Home() {
                   <Sparkles size={16} />
                 </span>
                 <span>گفت‌وگو دربارهٔ ایده</span>
+                {mentorMode === "demo" && (
+                  <span className="mentor-mode-badge">حالت نمایشی</span>
+                )}
               </div>
               <div className="mentor-message" aria-live="polite">
                 {busy ? (
@@ -2152,7 +2272,7 @@ export default function Home() {
                     <i /> در حال آماده‌کردن پرسش بعدی
                   </span>
                 ) : (
-                  mentorMessage.slice(0, 120)
+                  mentorMessage.slice(0, 240)
                 )}
               </div>
               <div className="question-card">
@@ -2162,7 +2282,7 @@ export default function Home() {
                 {devIndex < 10 && (
                   <p className="question-context">{devQuestion.questionContext}</p>
                 )}
-                <h2>
+                <h2 aria-live="polite" aria-atomic="true">
                   {devIndex < 10
                     ? devQuestion.question
                     : "پایهٔ سنجیده‌ای برای پیشنهادتان آماده کرده‌اید."}
@@ -2367,8 +2487,9 @@ export default function Home() {
                 <textarea
                   value={displayProposalText(reviewDraft[key] ?? "")}
                   onChange={(e) =>
-                    setReviewDraft({ ...reviewDraft, [key]: e.target.value })
+                    updateProposalField(activeIdea, key, e.target.value)
                   }
+                  maxLength={key === "title" ? 80 : 3000}
                   dir="auto"
                   rows={
                     key === "summary" || key === "problem" || key === "solution"

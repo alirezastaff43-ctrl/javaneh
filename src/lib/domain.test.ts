@@ -211,10 +211,22 @@ describe("demo domain rules", () => {
     ).toBe(72 * 60 * 60 * 1000);
       expect(formatDate(storedDeadline!)).toMatch(/۱۴۰۴/);
     expect(deferred.confirmationDeadlineAt).toBe(storedDeadline);
+    const restored = normalizeState({
+      schemaVersion: 1,
+      ideas: [{ ...deferred, proposal: { summary: "پیشنهاد قابل ویرایش" } }],
+    }).ideas[0];
+    expect(restored.confirmationDeadlineAt).toBe(storedDeadline);
+    expect(restored.proposal.summary).toBe("پیشنهاد قابل ویرایش");
     expect(
       applyDeadlineTransitions(
-        { ...emptyState(), ideas: [deferred] },
-        new Date(deferred.confirmationDeadlineAt!),
+        { ...emptyState(), ideas: [restored] },
+        new Date(new Date(storedDeadline!).getTime() - 1),
+      ).ideas[0].status,
+    ).toBe("awaiting-confirmation");
+    expect(
+      applyDeadlineTransitions(
+        { ...emptyState(), ideas: [restored] },
+        new Date(storedDeadline!),
       ).ideas[0].autoSubmitted,
     ).toBe(true);
     expect(submitNow(deferred, now).status).toBe("submitted");

@@ -5,6 +5,7 @@ import { redactPersonalData } from "@/lib/privacy";
 import {
   axesForStage,
   createDemoDecision,
+  isValidInterviewQuestion,
   questionContextForAxis,
   validateInterviewDecision,
   type InterviewRequest,
@@ -26,29 +27,29 @@ const requestSchema = z
         z.object({
           stage: z.enum(["initial", "development"]),
           section: z.string().max(80),
-          question: z.string().max(300),
-          answer: z.string().max(500),
+          question: z.string().max(200),
+          answer: z.string().max(200),
           createdAt: z.string().max(40),
         }).strict(),
       )
-      .max(4),
+      .max(14),
   })
   .strict();
 
 const responseSchema = z
   .object({
-    mentorMessage: z.string().trim().min(1).max(120),
+    mentorMessage: z.string().trim().min(1).max(240),
     stageComplete: z.boolean(),
     coveredSections: z.array(z.string().max(80)).max(10),
     nextSection: z.string().max(80).nullable(),
     nextQuestion: z.string().trim().min(1).max(600).nullable(),
     questionContext: z.unknown().optional(),
-  })
-  .strict();
+  });
 
-const MAX_BODY_BYTES = 24_000;
+const MAX_BODY_BYTES = 36_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 12_000;
 const MAX_PROVIDER_ATTEMPTS = 3;
+const MAX_DECISION_ATTEMPTS = 2;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 17_000;
 const PROVIDER_REQUEST_BUDGET_MS = 55_000;
 const INITIAL_RETRY_DELAY_MS = 500;
@@ -412,7 +413,22 @@ const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر ه�
 
 برای هر پرسش بعدی، علاوه بر خود پرسش یک questionContext مستقل بنویس: یک یا دو جملهٔ روشن که توضیح دهد چرا پاسخ به این پرسش در پرورش ایده یا فهم مسئله اهمیت دارد و به گفتهٔ واقعی شرکت‌کننده یا ابهام مشخص در گفت‌وگو وصل باشد. توضیح کلی و تکراری مانند «این موضوع مهم است» کافی نیست. فرض یا جزئیات ناگفته نساز، پاسخ را بازگو نکن، در questionContext سؤال نپرس و آن را حداکثر ۳۶۰ نویسه نگه دار. mentorMessage صرفاً واکنشی کوتاه است و جای توضیح چرایی پرسش را نمی‌گیرد.
 
-بخش‌ها ترتیب دارند. coveredSections فقط باید بخش‌های واجد شرایطِ eligibleCoveredSections را به‌روزرسانی کند: هرگز answeredSections، skippedSections یا بخشی خارج از eligibleCoveredSections را در آن نیاور. فقط بخش‌هایی را اضافه کن که پاسخ‌های قبلی واقعاً پوشش داده‌اند. سپس nextSection را نخستین بخش باقی‌مانده‌ای قرار بده که در coveredSections نیست و برای آن پرسشی تازه و مرتبط بنویس. پاسخ قبلی یا فعلی را فقط وقتی لحاظ کن که واقعاً به آن بخش مربوط باشد. هر بخش باقی‌مانده چند عبارت کانونی دارد؛ nextQuestion باید دست‌کم یکی از عبارت‌های کانونی بخش انتخاب‌شده را داشته باشد. پرسش باید فارسی روشن، مرتبط، غیرخالی، حداکثر ۶۰۰ نویسه و دقیقاً یک پرسش باشد. mentorMessage باید از پرسش کوتاه‌تر باشد. اگر بخشی باقی نمانده، stageComplete را true و nextSection، nextQuestion و questionContext را null قرار بده؛ در غیر این صورت stageComplete برابر false باشد. فقط یک JSON معتبر با همین کلیدها برگردان: mentorMessage، stageComplete، coveredSections، nextSection، nextQuestion و questionContext. mentorMessage باید تأییدی کوتاه و محترمانه به فارسی باشد.`;
+محورها راهنمای پوشش‌اند، نه ترتیب اجباری پرسش‌ها. coveredSections فقط باید بخش‌های واجد شرایطِ eligibleCoveredSections را دربرگیرد؛ هرگز answeredSections، skippedSections یا بخشی خارج از eligibleCoveredSections را در آن نیاور. فقط بخش‌هایی را پوشش‌یافته بدان که پاسخ‌های قبلی واقعاً روشن کرده‌اند یا برای این ایده نامرتبط‌اند. از میان بخش‌های باقی‌مانده، مرتبط‌ترین محور حل‌نشده را برای nextSection انتخاب کن؛ اگر از محوری جلوتر می‌روی، همهٔ محورهای واجد شرایط پیش از آن را که واقعاً پاسخ گرفته‌اند در coveredSections بیاور. پاسخ جاری را برای افزودن به coveredSections به‌کار نبر. اگر همهٔ محورهای لازم بررسی شده‌اند یا باقی‌مانده‌ها واقعاً نامرتبط‌اند، stageComplete را true قرار بده و همهٔ eligibleCoveredSections را در coveredSections بیاور. هرگز فقط برای کوتاه‌کردن مسیر، بخش مرتبط و بررسی‌نشده را پوشش‌یافته اعلام نکن.
+
+در هر نوبت، mentorMessage باید در یک یا دو جملهٔ کوتاه و دقیق نشان دهد از پاسخ جاری چه فهمیده‌ای؛ آن را به‌عنوان برداشت قابل‌اصلاح بیان کن و هیچ واقعیت یا تصمیمی به آن اضافه نکن. وقتی مرحله کامل می‌شود، همین پیام جمع‌بندی کوتاهی از پیشنهاد و گام بازبینی بعدی باشد، نه پرسش.
+
+برای پرسش بعدی، nextSection باید یکی از محورهای واجد شرایط و پوشش‌نیافته باشد. nextQuestion باید دست‌کم یکی از عبارت‌های کانونی همان محور را داشته باشد، فارسی روشن، مرتبط، غیرخالی، حداکثر ۶۰۰ نویسه و دقیقاً یک پرسش باشد. پاسخ را تکرار نکن و چند درخواست را در یک پرسش نیاور. questionContext در صورت کمک، کوتاه و مرتبط باشد. اگر مرحله کامل است، nextSection، nextQuestion و questionContext را null قرار بده؛ در غیر این صورت stageComplete برابر false باشد. فقط یک JSON معتبر با همین کلیدها برگردان: mentorMessage، stageComplete، coveredSections، nextSection، nextQuestion و questionContext.`;
+
+export async function GET() {
+  const providerResult = getProviderConfiguration();
+  return NextResponse.json({
+    mode:
+      "error" in providerResult &&
+      providerResult.error === "missing_provider_key"
+        ? "demo"
+        : "provider",
+  });
+}
 
 export async function POST(request: Request) {
   let input: z.infer<typeof requestSchema>;
@@ -460,14 +476,20 @@ export async function POST(request: Request) {
 
   const { apiKey, endpoint, model } = providerResult.configuration;
   const startedAt = Date.now();
-  let upstream: Response | null = null;
-  let transportFailure: "timeout" | "network" | null = null;
+  for (
+    let outputAttempt = 0;
+    outputAttempt < MAX_DECISION_ATTEMPTS;
+    outputAttempt += 1
+  ) {
+    let upstream: Response | null = null;
+    let transportFailure: "timeout" | "network" | null = null;
 
-  for (let attempt = 0; attempt < MAX_PROVIDER_ATTEMPTS; attempt += 1) {
-    const remainingBudget = PROVIDER_REQUEST_BUDGET_MS - (Date.now() - startedAt);
-    if (remainingBudget <= 0) break;
+    for (let attempt = 0; attempt < MAX_PROVIDER_ATTEMPTS; attempt += 1) {
+      const remainingBudget =
+        PROVIDER_REQUEST_BUDGET_MS - (Date.now() - startedAt);
+      if (remainingBudget <= 0) break;
 
-    try {
+      try {
       upstream = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -490,6 +512,15 @@ export async function POST(request: Request) {
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
+            ...(outputAttempt > 0
+              ? [
+                  {
+                    role: "system" as const,
+                    content:
+                      "پاسخ قبلی با قرارداد سازگار نبود. فقط JSON با کلیدهای مشخص‌شده بساز. اگر مرحله کامل نیست، nextSection و nextQuestion و questionContext را همگی با مقدار معتبر پر کن؛ اگر کامل است، stageComplete را true و هر سه را null بگذار.",
+                  },
+                ]
+              : []),
             {
               role: "user",
               content: JSON.stringify({
@@ -514,69 +545,68 @@ export async function POST(request: Request) {
         ]),
       });
       transportFailure = null;
-    } catch (error) {
-      if (request.signal.aborted) return new Response(null, { status: 499 });
-      transportFailure = isTimeoutError(error) ? "timeout" : "network";
-      upstream = null;
-    }
-
-    const retryable =
-      transportFailure !== null ||
-      (upstream !== null &&
-        !upstream.ok &&
-        isRetryableStatus(upstream.status));
-    if (!retryable || attempt === MAX_PROVIDER_ATTEMPTS - 1) break;
-
-    const retryAfterValue =
-      upstream?.headers.get("retry-after") ?? null;
-    const delay = retryDelay(
-      attempt,
-      upstream?.status === 429
-        ? parseRetryAfter(retryAfterValue)
-        : null,
-    );
-    const budgetAfterAttempt =
-      PROVIDER_REQUEST_BUDGET_MS - (Date.now() - startedAt);
-    if (delay + 1_000 >= budgetAfterAttempt) break;
-
-    if (upstream && !upstream.ok) {
-      try {
-        await readBoundedResponse(upstream);
-      } catch {
-        console.error("[interview] provider retry response could not be read");
+      } catch (error) {
+        if (request.signal.aborted) return new Response(null, { status: 499 });
+        transportFailure = isTimeoutError(error) ? "timeout" : "network";
+        upstream = null;
       }
-    }
-    await waitForRetry(delay);
-  }
 
-  if (!upstream) {
-    if (transportFailure === "timeout") {
-      console.error("[interview] provider request timed out");
-      return providerFailure("provider_timeout", 504);
+      const retryable =
+        transportFailure !== null ||
+        (upstream !== null &&
+          !upstream.ok &&
+          isRetryableStatus(upstream.status));
+      if (!retryable || attempt === MAX_PROVIDER_ATTEMPTS - 1) break;
+
+      const retryAfterValue = upstream?.headers.get("retry-after") ?? null;
+      const delay = retryDelay(
+        attempt,
+        upstream?.status === 429 ? parseRetryAfter(retryAfterValue) : null,
+      );
+      const budgetAfterAttempt =
+        PROVIDER_REQUEST_BUDGET_MS - (Date.now() - startedAt);
+      if (delay + 1_000 >= budgetAfterAttempt) break;
+
+      if (upstream && !upstream.ok) {
+        try {
+          await readBoundedResponse(upstream);
+        } catch {
+          console.error("[interview] provider retry response could not be read");
+        }
+      }
+      await waitForRetry(delay);
     }
-    console.error("[interview] provider request failed");
-    return providerFailure("provider_unavailable", 503);
-  }
-  if (!upstream.ok) {
-    await logProviderFailure(upstream, apiKey);
-    const retryAfter = upstream.headers.get("retry-after");
-    if (upstream.status === 429)
-      return providerFailure("provider_rate_limited", 429, retryAfter);
-    if (upstream.status === 401 || upstream.status === 403)
-      return providerFailure("provider_authentication", 502);
-    if ([500, 502, 503, 504].includes(upstream.status))
+
+    if (!upstream) {
+      if (transportFailure === "timeout") {
+        console.error("[interview] provider request timed out");
+        return providerFailure("provider_timeout", 504);
+      }
+      console.error("[interview] provider request failed");
       return providerFailure("provider_unavailable", 503);
-    return providerFailure("provider_request_rejected", 502);
-  }
+    }
+    if (!upstream.ok) {
+      await logProviderFailure(upstream, apiKey);
+      const retryAfter = upstream.headers.get("retry-after");
+      if (upstream.status === 429)
+        return providerFailure("provider_rate_limited", 429, retryAfter);
+      if (upstream.status === 401 || upstream.status === 403)
+        return providerFailure("provider_authentication", 502);
+      if ([500, 502, 503, 504].includes(upstream.status))
+        return providerFailure("provider_unavailable", 503);
+      return providerFailure("provider_request_rejected", 502);
+    }
 
   let responseBody: string | null;
   try {
     responseBody = await readBoundedResponse(upstream);
   } catch {
+    if (outputAttempt === 0) continue;
     console.error("[interview] provider response could not be read");
     return providerFailure("provider_invalid_response", 502);
   }
   if (responseBody === null) {
+    if (outputAttempt === 0) continue;
     console.error("[interview] provider response exceeded size limit");
     return providerFailure("provider_invalid_response", 502);
   }
@@ -584,6 +614,7 @@ export async function POST(request: Request) {
   try {
     payload = JSON.parse(responseBody);
   } catch {
+    if (outputAttempt === 0) continue;
     console.error("[interview] provider response was not valid JSON");
     return providerFailure("provider_invalid_response", 502);
   }
@@ -601,6 +632,7 @@ export async function POST(request: Request) {
       ? payload.choices[0].message.content
       : null;
   if (typeof content !== "string") {
+    if (outputAttempt === 0) continue;
     console.error("[interview] provider response did not contain message content");
     return providerFailure("provider_invalid_response", 502);
   }
@@ -609,12 +641,28 @@ export async function POST(request: Request) {
   try {
     untrustedDecision = JSON.parse(content);
   } catch {
+    if (outputAttempt === 0) continue;
     console.error("[interview] provider message was not valid JSON");
     return providerFailure("provider_invalid_response", 502);
   }
   const parsedDecision = responseSchema.safeParse(untrustedDecision);
   if (!parsedDecision.success) {
-    console.error("[interview] provider message did not match response schema");
+    const rootKeys =
+      untrustedDecision && typeof untrustedDecision === "object"
+        ? Object.keys(untrustedDecision)
+            .filter((key) => /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key))
+            .slice(0, 20)
+        : [];
+    console.error(
+      `[interview] provider response schema mismatch: ${JSON.stringify({
+        keys: rootKeys,
+        issues: parsedDecision.error.issues.slice(0, 8).map((issue) => ({
+          path: issue.path.join(".") || "root",
+          code: issue.code,
+        })),
+      })}`,
+    );
+    if (outputAttempt === 0) continue;
     return providerFailure("provider_invalid_response", 502);
   }
   const providerDecision = parsedDecision.data;
@@ -638,6 +686,24 @@ export async function POST(request: Request) {
         : questionContextForAxis(nextAxis.section)
       : null;
   const decision = { ...providerDecision, questionContext };
+  const nextQuestionChecks =
+    nextAxis && typeof decision.nextQuestion === "string"
+      ? {
+          persian: isPersianText(decision.nextQuestion),
+          questionMarks: (decision.nextQuestion.match(/[؟?]/g) ?? []).length,
+          focusTermMatched: nextAxis.focusTerms.some((term) =>
+            decision.nextQuestion!.toLocaleLowerCase("fa").includes(term),
+          ),
+          repeated: [
+            interview.question,
+            ...interview.history.map((item) => item.question),
+          ].some(
+            (previous) =>
+              previous.trim().toLocaleLowerCase("fa") ===
+              decision.nextQuestion!.trim().toLocaleLowerCase("fa"),
+          ),
+        }
+      : null;
   if (
     !isPersianText(decision.mentorMessage) ||
     (decision.nextQuestion !== null &&
@@ -646,8 +712,39 @@ export async function POST(request: Request) {
       !isPersianText(decision.questionContext)) ||
     !validateInterviewDecision(decision, interview)
   ) {
-    console.error("[interview] provider decision failed interview validation");
+    console.error(
+      `[interview] provider decision failed interview validation: ${JSON.stringify({
+        mentorMessage: isPersianText(decision.mentorMessage),
+        completionShape:
+          decision.stageComplete ===
+          (interview.remainingSections.length === 0),
+        coveredSectionsAllowed: decision.coveredSections.every((section) =>
+          interview.remainingSections.includes(section),
+        ),
+        nextAxisAllowed:
+          decision.stageComplete ||
+          interview.remainingSections.includes(decision.nextSection ?? ""),
+        questionValid:
+          decision.stageComplete ||
+          (nextAxis !== undefined &&
+            typeof decision.nextQuestion === "string" &&
+            isValidInterviewQuestion(decision.nextQuestion, nextAxis, [
+              interview.question,
+              ...interview.history.map((item) => item.question),
+            ])),
+        nextQuestionChecks,
+        contextValid:
+          decision.stageComplete ||
+          (typeof decision.questionContext === "string" &&
+            isPersianText(decision.questionContext) &&
+            !/[؟?]/u.test(decision.questionContext)),
+      })}`,
+    );
+    if (outputAttempt === 0) continue;
     return providerFailure("provider_invalid_response", 502);
   }
   return NextResponse.json({ mode: "provider", ...decision });
+  }
+
+  return providerFailure("provider_invalid_response", 502);
 }
