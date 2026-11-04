@@ -1,0 +1,503 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEVELOPMENT_AXES, INTAKE_AXES } from "@/lib/interviewer";
+import { POST } from "./route";
+
+function requestBody(overrides: Record<string, unknown> = {}) {
+  const axes = INTAKE_AXES;
+  return {
+    seed: "رفت‌وآمد سالمندان به بازار دشوار است",
+    stage: "initial",
+    section: axes[1].section,
+    index: 1,
+    question: "چه کسانی با این مشکل روبه‌رو هستند؟",
+    answer: "در مسیر بازار، سالمندان از پله‌های ورودی گفتند.",
+    answeredSections: [axes[0].section, axes[1].section],
+    skippedSections: [],
+    remainingSections: axes.slice(2).map((axis) => axis.section),
+    history: [
+      {
+        stage: "initial",
+        section: axes[0].section,
+        question: "چه مشکلی را مشاهده کرده‌اید؟",
+        answer: "ورودی بازار برای رفت‌وآمد سخت است.",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function validDecision() {
+  return {
+    mentorMessage: "Thanks for sharing that.",
+    stageComplete: false,
+    coveredSections: [],
+    nextSection: INTAKE_AXES[2].section,
+    nextQuestion: "What might still be unclear about why this happens?",
+  };
+}
+
+function providerResponse(content: string) {
+  return Response.json({
+    choices: [{ message: { content } }],
+  });
+}
+
+async function post(value: unknown) {
+  return POST(
+    new Request("http://localhost/api/mentor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(value),
+    }),
+  );
+}
+
+describe("adaptive interview route", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    vi.stubEnv("AI_API_KEY", "legacy-test-key");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GOOGLE_API_KEY", "");
+    vi.stubEnv("AI_BASE_URL", "");
+    vi.stubEnv("AI_MODEL", "");
+    vi.stubEnv("OPENROUTER_SITE_URL", "");
+    vi.stubEnv("OPENROUTER_APP_NAME", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the current answer and ordered history to make a provider decision", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(JSON.stringify(validDecision())),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const result = await response.json();
+    expect(response.status).toBe(200);
+    expect(result.nextQuestion).toBe(validDecision().nextQuestion);
+    expect(result.nextQuestion).not.toBe(INTAKE_AXES[2].question);
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(options.method).toBe("POST");
+    expect(options.headers).toEqual({
+      Authorization: "Bearer test-openrouter-key",
+      "Content-Type": "application/json",
+    });
+    const providerRequest = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(providerRequest.model).toBe("google/gemma-4-26b-a4b-it:free");
+    expect(providerRequest.response_format).toEqual({ type: "json_object" });
+    const userContext = JSON.parse(providerRequest.messages[1].content);
+    expect(userContext.answer).toBe(requestBody().answer);
+    expect(userContext.history).toEqual(requestBody().history);
+    expect(userContext).not.toHaveProperty("suggestedNextQuestion");
+  });
+
+  it("orders the bounded history and redacts identifiers before sending context", async () => {
+    const axes = DEVELOPMENT_AXES;
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(
+        JSON.stringify({
+          mentorMessage: "Thanks.",
+          stageComplete: false,
+          coveredSections: [],
+          nextSection: axes[3].section,
+          nextQuestion:
+            "What experience would a participant have from first contact through the change you hope to create?",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await post(
+      requestBody({
+        stage: "development",
+        section: axes[2].section,
+        index: 2,
+        question: "به‌نظر شما چرا این مشکل ادامه پیدا کرده است؟",
+        answer: "تماس با 09123456789 یا person@example.com",
+        answeredSections: axes.slice(0, 3).map((axis) => axis.section),
+        remainingSections: axes.slice(3).map((axis) => axis.section),
+        history: [
+          {
+            stage: "development",
+            section: axes[1].section,
+            question: "چه کسانی باید همراه باشند؟",
+            answer: "گروه‌های محلی",
+            createdAt: "2026-02-02T00:00:00.000Z",
+          },
+          {
+            stage: "development",
+            section: axes[0].section,
+            question: "چه نمونه‌ای مشاهده کردید؟",
+            answer: "یک نمونهٔ مشخص",
+            createdAt: "2026-02-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    const providerRequest = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const userContext = JSON.parse(providerRequest.messages[1].content);
+
+    expect(response.status).toBe(200);
+    expect(userContext.history.map((item: { section: string }) => item.section)).toEqual([
+      axes[0].section,
+      axes[1].section,
+    ]);
+    expect(userContext.answer).not.toContain("09123456789");
+    expect(userContext.answer).not.toContain("person@example.com");
+    expect(userContext.answer.match(/\[personal information removed\]/g)).toHaveLength(2);
+  });
+
+  it("uses configured endpoint and model and sends optional public attribution", async () => {
+    vi.stubEnv("AI_BASE_URL", "https://openrouter.ai/api/v1/");
+    vi.stubEnv("AI_MODEL", "custom/provider-model");
+    vi.stubEnv("OPENROUTER_SITE_URL", "https://javaneh.example");
+    vi.stubEnv("OPENROUTER_APP_NAME", "Javaneh");
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(JSON.stringify(validDecision())),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const [, options] = fetchMock.mock.calls[0];
+    const providerRequest = JSON.parse(options.body);
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://openrouter.ai/api/v1/chat/completions",
+    );
+    expect(providerRequest.model).toBe("custom/provider-model");
+    expect(options.headers).toMatchObject({
+      "HTTP-Referer": "https://javaneh.example",
+      "X-Title": "Javaneh",
+    });
+  });
+
+  it("uses the Gemini OpenAI-compatible endpoint and its provider-specific key", async () => {
+    vi.stubEnv("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai");
+    vi.stubEnv("AI_MODEL", "gemini-3.8-flash");
+    vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
+    vi.stubEnv("OPENROUTER_API_KEY", "wrong-provider-key");
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(JSON.stringify(validDecision())),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const [url, options] = fetchMock.mock.calls[0];
+    const providerRequest = JSON.parse(options.body);
+
+    expect(response.status).toBe(200);
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    );
+    expect(options.headers.Authorization).toBe("Bearer test-gemini-key");
+    expect(providerRequest.model).toBe("gemini-3.8-flash");
+  });
+
+  it("does not send an OpenRouter key to a Gemini endpoint", async () => {
+    vi.stubEnv(
+      "AI_BASE_URL",
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    );
+    vi.stubEnv("OPENROUTER_API_KEY", "wrong-provider-key");
+    vi.stubEnv("AI_API_KEY", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(result.code).toBe("provider_configuration");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(error.mock.calls)).not.toContain("wrong-provider-key");
+  });
+
+  it("uses the legacy API key when the OpenRouter key is not configured", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(JSON.stringify(validDecision())),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe(
+      "Bearer legacy-test-key",
+    );
+  });
+
+  it("returns an English demo question when no key is configured", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.stubEnv("AI_API_KEY", "");
+
+    const response = await post(
+      requestBody({
+        section: INTAKE_AXES[0].section,
+        index: 0,
+        question: "چه مشکل مشخصی را مشاهده کرده‌اید؟",
+        answer: "چراغ مسیر پیاده‌رو شب‌ها خاموش می‌ماند.",
+        answeredSections: [INTAKE_AXES[0].section],
+        remainingSections: INTAKE_AXES.slice(1).map((axis) => axis.section),
+        history: [],
+      }),
+    );
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.mode).toBe("demo");
+    expect(result.nextQuestion).toBe(INTAKE_AXES[1].question);
+    expect(result.nextSection).toBe(INTAKE_AXES[1].section);
+    expect(result.stageComplete).toBe(false);
+  });
+
+  it("completes the final axis without manufacturing another question", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.stubEnv("AI_API_KEY", "");
+    const response = await post(
+      requestBody({
+        section: INTAKE_AXES[4].section,
+        index: 4,
+        question: "چه ارتباطی با این مسئله دارید؟",
+        answer: "در محله زندگی می‌کنم.",
+        answeredSections: INTAKE_AXES.map((axis) => axis.section),
+        remainingSections: [],
+        history: [],
+      }),
+    );
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.stageComplete).toBe(true);
+    expect(result.nextSection).toBeNull();
+    expect(result.nextQuestion).toBeNull();
+  });
+
+  it("completes the final development axis without a follow-up question", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.stubEnv("AI_API_KEY", "");
+    const axes = DEVELOPMENT_AXES;
+    const response = await post(
+      requestBody({
+        stage: "development",
+        section: axes[axes.length - 1].section,
+        index: axes.length - 1,
+        question: "برای گام‌های بعدی چه چیزی را بررسی می‌کنید؟",
+        answer: "با افراد درگیر گفت‌وگو می‌کنم.",
+        answeredSections: axes.map((axis) => axis.section),
+        remainingSections: [],
+        history: [],
+      }),
+    );
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.stageComplete).toBe(true);
+    expect(result.nextQuestion).toBeNull();
+  });
+
+  it("rejects malformed or inconsistent participant requests", async () => {
+    const invalidAxis = await post(
+      requestBody({ section: "Unknown axis" }),
+    );
+    expect(invalidAxis.status).toBe(400);
+
+    const emptyAnswer = await post(requestBody({ answer: "   " }));
+    expect(emptyAnswer.status).toBe(400);
+
+    const badBody = await POST(
+      new Request("http://localhost/api/mentor", {
+        method: "POST",
+        body: "{",
+      }),
+    );
+    expect(badBody.status).toBe(400);
+  });
+
+  it.each([
+    ["invalid JSON", "not-json"],
+    [
+      "wrong axis",
+      JSON.stringify({
+        ...validDecision(),
+        nextSection: DEVELOPMENT_AXES[0].section,
+      }),
+    ],
+    [
+      "non-English question",
+      JSON.stringify({ ...validDecision(), nextQuestion: "Что вы заметили?" }),
+    ],
+    [
+      "empty question",
+      JSON.stringify({ ...validDecision(), nextQuestion: "" }),
+    ],
+    [
+      "unrelated question",
+      JSON.stringify({
+        ...validDecision(),
+        nextQuestion: "What change do you expect from the solution?",
+      }),
+    ],
+    [
+      "repeated question",
+      JSON.stringify({
+        ...validDecision(),
+        nextQuestion: "What might still be unclear about why this happens?",
+      }),
+    ],
+  ])("rejects provider output with %s", async (_case, content) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(providerResponse(content)),
+    );
+
+    const response = await post(
+      requestBody(
+        _case === "repeated question"
+          ? { question: validDecision().nextQuestion }
+          : {},
+      ),
+    );
+    expect(response.status).toBe(502);
+  });
+
+  it("retains a clear failure response when the provider is unavailable", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(result.error).toContain("Your answer is saved");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries timeouts and reports a gateway timeout after the final attempt", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new DOMException("timed out", "TimeoutError"));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(504);
+    expect(result.code).toBe("provider_timeout");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns a safe error for provider HTTP failures without logging credentials", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          { error: { message: "provider detail" } },
+          { status: 429, headers: { "Retry-After": "0" } },
+        ),
+      ),
+    );
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(result.code).toBe("provider_rate_limited");
+    expect(result.error).not.toContain("provider detail");
+    expect(JSON.stringify(result)).not.toContain("test-openrouter-key");
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('"status":429'),
+    );
+    expect(JSON.stringify(error.mock.calls)).not.toContain("test-openrouter-key");
+  });
+
+  it("retries transient 503 failures and returns the successful decision", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { message: "temporarily unavailable" } },
+          { status: 503, headers: { "Retry-After": "0" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        providerResponse(JSON.stringify(validDecision())),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.nextQuestion).toBe(validDecision().nextQuestion);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after the retry limit for persistent 503 failures", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json(
+        { error: { message: "temporarily unavailable" } },
+        { status: 503, headers: { "Retry-After": "0" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(result.code).toBe("provider_unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(error.mock.calls)).not.toContain("test-openrouter-key");
+  });
+
+  it.each([400, 401, 403])(
+    "does not retry permanent provider HTTP %i failures",
+    async (status) => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const fetchMock = vi.fn().mockResolvedValue(
+        Response.json(
+          { error: { message: "provider detail" } },
+          { status },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const response = await post(requestBody());
+      const result = await response.json();
+
+      expect(response.status).toBe(502);
+      expect(result.code).toBe(
+        status === 401 || status === 403
+          ? "provider_authentication"
+          : "provider_request_rejected",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(error.mock.calls)).toContain("provider detail");
+      expect(JSON.stringify(error.mock.calls)).not.toContain("test-openrouter-key");
+    },
+  );
+
+  it("rejects insecure provider endpoints without making an upstream request", async () => {
+    vi.stubEnv("AI_BASE_URL", "http://provider.example/api");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(result.code).toBe("provider_configuration");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
