@@ -52,6 +52,19 @@ describe("moderation route", () => {
     expect(providerRequest.messages[0].content).toContain("off_topic");
   });
 
+  it("uses AvalAI's required temperature", async () => {
+    vi.stubEnv("AI_BASE_URL", "https://api.avalai.ir/v1");
+    vi.stubEnv("AVALAI_API_KEY", "test-avalai-key");
+    const fetchMock = vi.fn().mockResolvedValue(providerResponse("relevant"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post();
+    const providerRequest = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(response.status).toBe(200);
+    expect(providerRequest.temperature).toBe(1);
+  });
+
   it("uses the deterministic fallback when no provider key is configured", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "");
     const fetchMock = vi.fn();

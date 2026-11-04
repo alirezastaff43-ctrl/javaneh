@@ -226,7 +226,11 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model: providerResult.configuration.model,
-        temperature: 0.6,
+        temperature: providerResult.configuration.endpoint.includes(
+          "api.avalai.ir",
+        )
+          ? 1
+          : 0.6,
         max_tokens: 500,
         messages: providerMessages,
       }),

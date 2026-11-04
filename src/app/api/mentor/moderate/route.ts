@@ -69,7 +69,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model,
-        temperature: 0,
+        temperature: endpoint.includes("api.avalai.ir") ? 1 : 0,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
