@@ -129,6 +129,7 @@ export type InterviewDecision = {
   coveredSections: string[];
   nextSection: string | null;
   nextQuestion: string | null;
+  questionContext: string | null;
 };
 
 export function axesForStage(stage: InterviewStage): readonly InterviewAxis[] {
@@ -197,6 +198,7 @@ export function validateInterviewDecision(
     return (
       result.nextSection === null &&
       result.nextQuestion === null &&
+      result.questionContext === null &&
       uncoveredSections.length === 0
     );
   }
@@ -204,7 +206,12 @@ export function validateInterviewDecision(
   if (
     uncoveredSections.length === 0 ||
     result.nextSection !== uncoveredSections[0] ||
-    typeof result.nextQuestion !== "string"
+    typeof result.nextQuestion !== "string" ||
+    typeof result.questionContext !== "string" ||
+    result.questionContext.trim().length === 0 ||
+    result.questionContext.length > 360 ||
+    !isPersianText(result.questionContext) ||
+    /[؟?]/u.test(result.questionContext)
   )
     return false;
 
@@ -228,6 +235,7 @@ export function createDemoDecision(
       coveredSections: [],
       nextSection: null,
       nextQuestion: null,
+      questionContext: null,
     };
   }
 
@@ -236,17 +244,48 @@ export function createDemoDecision(
   const isUnsure = /(?:مطمئن نیستم|نمی‌دانم|نمی دونم|نظری ندارم)/u.test(
     request.answer,
   );
-    const answerQuote = request.answer.trim();
-    const canQuoteAnswer = answerQuote.length <= 60 && !/[؟?]/u.test(answerQuote);
+  const answerQuote = request.answer.trim();
+  const canQuoteAnswer =
+    answerQuote.length <= 60 && !/[؟?]/u.test(answerQuote);
   const nextQuestion =
-      isUnsure || !canQuoteAnswer
+    isUnsure || !canQuoteAnswer
       ? nextAxis.question
-        : `گفتی «\u2068${answerQuote}\u2069»؛ ${nextAxis.question}`;
+      : `گفتی «\u2068${answerQuote}\u2069»؛ ${nextAxis.question}`;
+  const questionContext = [
+    isUnsure ? "لازم نیست از همین حالا پاسخ قطعی داشته باشی." : "",
+    questionContextForAxis(nextSection),
+  ]
+    .filter(Boolean)
+    .join("؛ ");
   return {
     mentorMessage: "ممنون که این را با من در میان گذاشتی.",
     stageComplete: false,
     coveredSections: [],
     nextSection,
     nextQuestion,
+    questionContext,
   };
+}
+
+export function questionContextForAxis(section: string): string {
+  const contexts: Record<string, string> = {
+    "The problem": "شناخت موقعیت دقیق بروز مسئله کمک می‌کند دامنه‌اش را از برداشت کلی جدا کنیم",
+    "People affected": "شناخت تجربهٔ افراد درگیر کمک می‌کند نیازهای واقعی و تفاوت تجربه‌هایشان را ببینیم",
+    "What is known": "جداکردن دانسته‌ها از پرسش‌های بی‌پاسخ کمک می‌کند از تکرار راه‌های آزموده‌شده دور بمانیم",
+    "Your idea": "روشن‌شدن سازوکار راهکار کمک می‌کند ببینیم ایده قرار است چگونه به مسئله پاسخ دهد",
+    "Your connection": "شناخت انگیزه و ارتباط تو با موضوع کمک می‌کند نقطهٔ شروع و توانایی‌های خودت را در نظر بگیریم",
+    Evidence: "نمونه‌های واقعی کمک می‌کنند مسئله را با شواهد قابل بررسی بسنجیم",
+    Stakeholders: "شناخت افراد مرتبط کمک می‌کند دیدگاه‌های لازم و کسانی را که ممکن است نادیده بمانند پیدا کنیم",
+    "Root causes": "بررسی علت‌های احتمالی کمک می‌کند میان نشانهٔ مسئله و ریشه‌های آن تفاوت بگذاریم",
+    Solution: "روشن‌شدن تجربهٔ افراد از راهکار کمک می‌کند بفهمیم تغییر موردنظر در عمل چگونه رخ می‌دهد",
+    Feasibility: "شناخت منابع و محدودیت‌ها کمک می‌کند گام بعدی با شرایط واقعی تناسب داشته باشد",
+    Pilot: "یک آزمون کوچک کمک می‌کند پیش از صرف منابع بیشتر، فرض‌های اصلی ایده را بررسی کنیم",
+    Outcomes: "مشخص‌کردن تغییر مورد انتظار کمک می‌کند بعداً ارزیابی کنیم آیا ایده اثر گذاشته است",
+    "Inclusion and risk": "پیش‌بینی موانع و پیامدهای ناخواسته کمک می‌کند مشارکت امن‌تر و فراگیرتری طراحی کنیم",
+    Delivery: "تبدیل ایده به گام‌های روشن کمک می‌کند شروع کار و مسئولیت‌ها واقع‌بینانه باشد",
+    "Next actions": "انتخاب پرسش بی‌پاسخ و گام بعدی کمک می‌کند مسیر ادامهٔ کار روشن بماند",
+  };
+  const context = contexts[section];
+  if (!context) throw new Error("Unknown interview section");
+  return `${context}.`;
 }

@@ -5,6 +5,7 @@ import { redactPersonalData } from "@/lib/privacy";
 import {
   axesForStage,
   createDemoDecision,
+  questionContextForAxis,
   validateInterviewDecision,
   type InterviewRequest,
 } from "@/lib/interviewer";
@@ -41,6 +42,7 @@ const responseSchema = z
     coveredSections: z.array(z.string().max(80)).max(10),
     nextSection: z.string().max(80).nullable(),
     nextQuestion: z.string().trim().min(1).max(600).nullable(),
+    questionContext: z.unknown().optional(),
   })
   .strict();
 
@@ -398,7 +400,7 @@ function toInterviewRequest(input: z.infer<typeof requestSchema>): InterviewRequ
   };
 }
 
-const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر هستی و به شرکت‌کننده کمک می‌کنی ایده‌ای برای نوآوری اجتماعی را پرورش دهد. زبان پاسخ الزامی است: همهٔ بخش‌های قابل‌خواندن برای انسان، از جمله mentorMessage و nextQuestion، باید به فارسی روان، طبیعی و کوتاه باشند؛ حتی اگر ورودی شرکت‌کننده به زبان دیگری باشد.
+const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر هستی و به شرکت‌کننده کمک می‌کنی ایده‌ای برای نوآوری اجتماعی را پرورش دهد. زبان پاسخ الزامی است: همهٔ بخش‌های قابل‌خواندن برای انسان، از جمله mentorMessage، questionContext و nextQuestion، باید به فارسی روان، طبیعی و کوتاه باشند؛ حتی اگر ورودی شرکت‌کننده به زبان دیگری باشد.
 
 لحن تو کنجکاو، دقیق، محترمانه و بدون قضاوت است. در هر نوبت فقط یک پرسش روشن و متمرکز بپرس.
 
@@ -408,7 +410,9 @@ const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر ه�
 
 پرسش بعدی را با توجه به ایدهٔ اولیه، مرحله، پرسش و پاسخ فعلی، سابقهٔ گفت‌وگو و بخش‌های باقی‌مانده انتخاب کن. پرسش ثابت یا پیشنهادی را صرفاً تکرار نکن. به جزئیاتی وصل شو که شرکت‌کننده واقعاً گفته است: اگر پاسخ کلی است نمونه بخواه، فقط ابهام‌ها را روشن کن و یک بخش پیشین را فقط وقتی پوشش‌یافته بدان که پاسخ واقعاً به آن پرداخته باشد. پاسخ را تکرار نکن، پرسش تکراری یا چندبخشی نپرس و بی‌منطق از موضوعی به موضوع دیگر نپر. تصمیم، راهکار یا تجربه‌ای را که شرکت‌کننده نگفته به او نسبت نده. اگر مطمئن نیست، بدون قضاوت راهی ساده و کم‌فشار برای بررسی پیشنهاد بده.
 
-بخش‌ها ترتیب دارند. coveredSections فقط باید بخش‌های واجد شرایطِ eligibleCoveredSections را به‌روزرسانی کند: هرگز answeredSections، skippedSections یا بخشی خارج از eligibleCoveredSections را در آن نیاور. فقط بخش‌هایی را اضافه کن که پاسخ‌های قبلی واقعاً پوشش داده‌اند. سپس nextSection را نخستین بخش باقی‌مانده‌ای قرار بده که در coveredSections نیست و برای آن پرسشی تازه و مرتبط بنویس. پاسخ قبلی یا فعلی را فقط وقتی لحاظ کن که واقعاً به آن بخش مربوط باشد. هر بخش باقی‌مانده چند عبارت کانونی دارد؛ nextQuestion باید دست‌کم یکی از عبارت‌های کانونی بخش انتخاب‌شده را داشته باشد. پرسش باید فارسی روشن، مرتبط، غیرخالی، حداکثر ۶۰۰ نویسه و دقیقاً یک پرسش باشد. mentorMessage باید از پرسش کوتاه‌تر باشد. اگر بخشی باقی نمانده، stageComplete را true و nextSection و nextQuestion را null قرار بده؛ در غیر این صورت stageComplete برابر false باشد. فقط یک JSON معتبر با همین کلیدها برگردان: mentorMessage، stageComplete، coveredSections، nextSection و nextQuestion. mentorMessage باید تأییدی کوتاه و محترمانه به فارسی باشد.`;
+برای هر پرسش بعدی، علاوه بر خود پرسش یک questionContext مستقل بنویس: یک یا دو جملهٔ روشن که توضیح دهد چرا پاسخ به این پرسش در پرورش ایده یا فهم مسئله اهمیت دارد و به گفتهٔ واقعی شرکت‌کننده یا ابهام مشخص در گفت‌وگو وصل باشد. توضیح کلی و تکراری مانند «این موضوع مهم است» کافی نیست. فرض یا جزئیات ناگفته نساز، پاسخ را بازگو نکن، در questionContext سؤال نپرس و آن را حداکثر ۳۶۰ نویسه نگه دار. mentorMessage صرفاً واکنشی کوتاه است و جای توضیح چرایی پرسش را نمی‌گیرد.
+
+بخش‌ها ترتیب دارند. coveredSections فقط باید بخش‌های واجد شرایطِ eligibleCoveredSections را به‌روزرسانی کند: هرگز answeredSections، skippedSections یا بخشی خارج از eligibleCoveredSections را در آن نیاور. فقط بخش‌هایی را اضافه کن که پاسخ‌های قبلی واقعاً پوشش داده‌اند. سپس nextSection را نخستین بخش باقی‌مانده‌ای قرار بده که در coveredSections نیست و برای آن پرسشی تازه و مرتبط بنویس. پاسخ قبلی یا فعلی را فقط وقتی لحاظ کن که واقعاً به آن بخش مربوط باشد. هر بخش باقی‌مانده چند عبارت کانونی دارد؛ nextQuestion باید دست‌کم یکی از عبارت‌های کانونی بخش انتخاب‌شده را داشته باشد. پرسش باید فارسی روشن، مرتبط، غیرخالی، حداکثر ۶۰۰ نویسه و دقیقاً یک پرسش باشد. mentorMessage باید از پرسش کوتاه‌تر باشد. اگر بخشی باقی نمانده، stageComplete را true و nextSection، nextQuestion و questionContext را null قرار بده؛ در غیر این صورت stageComplete برابر false باشد. فقط یک JSON معتبر با همین کلیدها برگردان: mentorMessage، stageComplete، coveredSections، nextSection، nextQuestion و questionContext. mentorMessage باید تأییدی کوتاه و محترمانه به فارسی باشد.`;
 
 export async function POST(request: Request) {
   let input: z.infer<typeof requestSchema>;
@@ -613,11 +617,33 @@ export async function POST(request: Request) {
     console.error("[interview] provider message did not match response schema");
     return providerFailure("provider_invalid_response", 502);
   }
-  const decision = parsedDecision.data;
+  const providerDecision = parsedDecision.data;
+  const nextAxis =
+    !providerDecision.stageComplete &&
+    typeof providerDecision.nextSection === "string"
+      ? axesForStage(interview.stage).find(
+          (axis) => axis.section === providerDecision.nextSection,
+        )
+      : undefined;
+  const providerQuestionContext = providerDecision.questionContext;
+  const questionContext = providerDecision.stageComplete
+    ? null
+    : nextAxis
+      ? typeof providerQuestionContext === "string" &&
+        providerQuestionContext.trim().length > 0 &&
+        providerQuestionContext.length <= 360 &&
+        isPersianText(providerQuestionContext) &&
+        !/[؟?]/u.test(providerQuestionContext)
+        ? providerQuestionContext.trim()
+        : questionContextForAxis(nextAxis.section)
+      : null;
+  const decision = { ...providerDecision, questionContext };
   if (
     !isPersianText(decision.mentorMessage) ||
     (decision.nextQuestion !== null &&
       !isPersianText(decision.nextQuestion)) ||
+    (decision.questionContext !== null &&
+      !isPersianText(decision.questionContext)) ||
     !validateInterviewDecision(decision, interview)
   ) {
     console.error("[interview] provider decision failed interview validation");

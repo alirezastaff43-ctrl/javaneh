@@ -896,6 +896,13 @@ input:focus {
   font-weight: 700;
 }
 
+.question-context {
+  margin: 0 0 10px;
+  color: #b7c8c0;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
 .question-card h2 {
   margin-block-end: 20px;
   font-size: 21px;
@@ -2990,6 +2997,12 @@ input:focus {
   font-size: 18px;
   font-weight: 640;
   line-height: 1.45;
+}
+
+.intake-question-heading .question-context {
+  margin: 6px 0 0;
+  color: #b8d1d7;
+  font-size: 14px;
 }
 
 .intake-main .question-card textarea {

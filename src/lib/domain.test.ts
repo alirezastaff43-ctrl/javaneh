@@ -107,6 +107,8 @@ describe("demo domain rules", () => {
             index: 2,
             section: "What is known",
             text: "دربارهٔ علت این مسئله چه چیزی را می‌دانید؟",
+            questionContext:
+              "جداکردن دانسته‌ها از پرسش‌های بی‌پاسخ کمک می‌کند مسیر بررسی روشن شود.",
           },
           pendingTurn: {
             stage: "initial",
@@ -114,6 +116,8 @@ describe("demo domain rules", () => {
             section: "What is known",
             question: "دربارهٔ علت این مسئله چه چیزی را می‌دانید؟",
             answer: "هنوز مطمئن نیستم.",
+            questionContext:
+              "لازم نیست از همین حالا پاسخ قطعی داشته باشی؛ مسیر بررسی را پیدا می‌کنیم.",
           },
           skippedSections: {
             initial: ["People affected", "Not an axis"],
@@ -127,8 +131,11 @@ describe("demo domain rules", () => {
       index: 2,
       section: "What is known",
       text: "دربارهٔ علت این مسئله چه چیزی را می‌دانید؟",
+      questionContext:
+        "جداکردن دانسته‌ها از پرسش‌های بی‌پاسخ کمک می‌کند مسیر بررسی روشن شود.",
     });
     expect(restored.pendingTurn?.answer).toBe("هنوز مطمئن نیستم.");
+    expect(restored.pendingTurn?.questionContext).toContain("پاسخ قطعی");
     expect(restored.skippedSections?.initial).toEqual(["People affected"]);
 
     const oldData = normalizeState({
@@ -144,6 +151,29 @@ describe("demo domain rules", () => {
       ],
     }).ideas[0];
     expect(oldData.mentorNextQuestion?.section).toBe("People affected");
+    expect(oldData.mentorNextQuestion).not.toHaveProperty("questionContext");
+  });
+
+  it("drops invalid saved question explanations without discarding valid questions", () => {
+    const restored = normalizeState({
+      schemaVersion: 1,
+      ideas: [
+        idea({
+          mentorNextQuestion: {
+            stage: "initial",
+            index: 1,
+            section: "People affected",
+            text: "چه کسانی با این مسئله روبه‌رو هستند؟",
+            questionContext: "A non-Persian explanation.",
+          },
+        }),
+      ],
+    }).ideas[0];
+
+    expect(restored.mentorNextQuestion?.text).toBe(
+      "چه کسانی با این مسئله روبه‌رو هستند؟",
+    );
+    expect(restored.mentorNextQuestion).not.toHaveProperty("questionContext");
   });
 
   it("drops dynamic question and pending turn metadata with invalid axis indexes", () => {

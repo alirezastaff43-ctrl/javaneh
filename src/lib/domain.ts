@@ -3,6 +3,7 @@ import {
   findAxis,
   type InterviewStage,
 } from "./interviewer";
+import { isPersianText } from "./locale";
 
 export const MAX_IDEAS = 3;
 export const STORAGE_KEY = "javaneh-demo-v1";
@@ -46,6 +47,7 @@ export type Idea = {
     index: number;
     section?: string;
     text: string;
+    questionContext?: string;
   };
   pendingTurn?: {
     stage: InterviewStage;
@@ -53,6 +55,7 @@ export type Idea = {
     section: string;
     question: string;
     answer: string;
+    questionContext?: string;
   };
   skippedSections?: Partial<Record<InterviewStage, string[]>>;
   editingProgress?: { stage: "initial" | "development"; index: number };
@@ -263,6 +266,16 @@ function normalizeIdea(value: unknown): Idea | null {
           idea.mentorNextQuestion.index
         ].section,
       text: idea.mentorNextQuestion.text.slice(0, 600),
+      ...(typeof idea.mentorNextQuestion.questionContext === "string" &&
+      idea.mentorNextQuestion.questionContext.trim().length > 0 &&
+      idea.mentorNextQuestion.questionContext.length <= 360 &&
+      isPersianText(idea.mentorNextQuestion.questionContext) &&
+      !/[؟?]/u.test(idea.mentorNextQuestion.questionContext)
+        ? {
+            questionContext:
+              idea.mentorNextQuestion.questionContext.slice(0, 360),
+          }
+        : {}),
     };
   }
   if (
@@ -290,6 +303,13 @@ function normalizeIdea(value: unknown): Idea | null {
       section: idea.pendingTurn.section,
       question: idea.pendingTurn.question,
       answer: idea.pendingTurn.answer,
+      ...(typeof idea.pendingTurn.questionContext === "string" &&
+      idea.pendingTurn.questionContext.trim().length > 0 &&
+      idea.pendingTurn.questionContext.length <= 360 &&
+      isPersianText(idea.pendingTurn.questionContext) &&
+      !/[؟?]/u.test(idea.pendingTurn.questionContext)
+        ? { questionContext: idea.pendingTurn.questionContext }
+        : {}),
     };
   }
   if (idea.skippedSections && typeof idea.skippedSections === "object") {

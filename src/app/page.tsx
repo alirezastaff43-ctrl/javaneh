@@ -58,6 +58,7 @@ import {
 import {
   axesForStage,
   findAxis,
+  questionContextForAxis,
   validateInterviewDecision,
   INTAKE_AXES as intakeQuestions,
   DEVELOPMENT_AXES as developmentQuestions,
@@ -247,7 +248,9 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
       ? (idea.intakeIndex ?? 0)
       : (idea.developmentIndex ?? 0);
   const list = stage === "initial" ? intakeQuestions : developmentQuestions;
-  const base = list[Math.min(index, list.length - 1)];
+  const axis = list[Math.min(index, list.length - 1)];
+  const defaultQuestionContext = questionContextForAxis(axis.section);
+  const base = { ...axis, questionContext: defaultQuestionContext };
   const existing = idea.answers.find((item) => item.section === base.section);
   if (
     idea.pendingTurn?.stage === stage &&
@@ -255,7 +258,12 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
     idea.pendingTurn.section === base.section &&
     isPersianText(idea.pendingTurn.question)
   )
-    return { ...base, question: idea.pendingTurn.question };
+    return {
+      ...base,
+      question: idea.pendingTurn.question,
+      questionContext:
+        idea.pendingTurn.questionContext || defaultQuestionContext,
+    };
   if (
     idea.mentorNextQuestion?.stage === stage &&
     idea.mentorNextQuestion.index === index &&
@@ -263,7 +271,12 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
       idea.mentorNextQuestion.section === base.section) &&
     isPersianText(idea.mentorNextQuestion.text)
   ) {
-    return { ...base, question: idea.mentorNextQuestion.text };
+    return {
+      ...base,
+      question: idea.mentorNextQuestion.text,
+      questionContext:
+        idea.mentorNextQuestion.questionContext || defaultQuestionContext,
+    };
   }
   if (
     idea.editingProgress?.stage === stage &&
@@ -271,7 +284,11 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
     existing &&
     isPersianText(existing.question)
   )
-    return { ...base, question: existing.question };
+    return {
+      ...base,
+      question: existing.question,
+      questionContext: defaultQuestionContext,
+    };
   if (idea.draftAnswer) return base;
   if (stage === "initial" && index === 0 && idea.seed.length > 20) {
     return {
@@ -651,6 +668,7 @@ export default function Home() {
           section: currentAxis.section,
           question: questionData.question,
           answer: answerText,
+          questionContext: questionData.questionContext,
         };
         updated.pendingTurn = turn;
         updated.editingProgress = undefined;
@@ -770,6 +788,7 @@ export default function Home() {
               index: nextIndex,
               section: decision.nextSection!,
               text: decision.nextQuestion!,
+              questionContext: decision.questionContext!,
             },
         pendingTurn: undefined,
         editingProgress: undefined,
@@ -945,10 +964,16 @@ export default function Home() {
       .toUpperCase() || "J";
   const currentQuestion = activeIdea
     ? getQuestion(activeIdea, "initial")
-    : intakeQuestions[0];
+    : {
+        ...intakeQuestions[0],
+        questionContext: questionContextForAxis(intakeQuestions[0].section),
+      };
   const devQuestion = activeIdea
     ? getQuestion(activeIdea, "development")
-    : developmentQuestions[0];
+    : {
+        ...developmentQuestions[0],
+        questionContext: questionContextForAxis(developmentQuestions[0].section),
+      };
   const initialIndex = activeIdea?.intakeIndex ?? 0;
   const devIndex = activeIdea?.developmentIndex ?? 0;
   const pendingAnswer = activeIdea?.pendingTurn
@@ -1418,6 +1443,11 @@ export default function Home() {
                         ? displaySection(currentQuestion.section)
                         : "آمادهٔ بازبینی"}
                     </span>
+                    {initialIndex < 5 && (
+                      <p className="question-context">
+                        {currentQuestion.questionContext}
+                      </p>
+                    )}
                     <h2>
                       {initialIndex < 5
                         ? currentQuestion.question
@@ -2129,6 +2159,9 @@ export default function Home() {
                 <span className="question-kicker">
                   {devIndex < 10 ? displaySection(devQuestion.section) : "پیشنهاد آماده است"}
                 </span>
+                {devIndex < 10 && (
+                  <p className="question-context">{devQuestion.questionContext}</p>
+                )}
                 <h2>
                   {devIndex < 10
                     ? devQuestion.question

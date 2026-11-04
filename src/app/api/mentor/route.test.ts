@@ -34,12 +34,55 @@ function validDecision() {
     coveredSections: [],
     nextSection: INTAKE_AXES[2].section,
     nextQuestion: "چه چیزهایی دربارهٔ علت این مسئله هنوز برایت روشن نیست؟",
+    questionContext:
+      "جداکردن دانسته‌ها از پرسش‌های بی‌پاسخ کمک می‌کند بفهمیم چه چیزی هنوز نیاز به بررسی دارد.",
   };
 }
 
 function providerResponse(content: string) {
   return Response.json({
     choices: [{ message: { content } }],
+  });
+
+  it("uses a safe Persian explanation when the provider omits it", async () => {
+    const decision = validDecision();
+    delete (decision as Partial<typeof decision>).questionContext;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(providerResponse(JSON.stringify(decision))),
+    );
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.nextQuestion).toBe(decision.nextQuestion);
+    expect(result.questionContext).toContain("دانسته‌ها");
+    expect(result.questionContext).toMatch(/[آ-ی]/u);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["non-Persian", "This context explains why the question matters."],
+    ["question-shaped", "چرا دانستن این موضوع به فهم مسئله کمک می‌کند؟"],
+    ["too long", "ا".repeat(361)],
+    ["null", null],
+  ])("replaces a %s provider explanation with a safe fallback", async (_label, context) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        providerResponse(
+          JSON.stringify({ ...validDecision(), questionContext: context }),
+        ),
+      ),
+    );
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.questionContext).toContain("دانسته‌ها");
+    expect(result.questionContext).not.toMatch(/[؟?]/u);
   });
 }
 
@@ -82,6 +125,7 @@ describe("adaptive interview route", () => {
     expect(response.status).toBe(200);
     expect(result.nextQuestion).toBe(validDecision().nextQuestion);
     expect(result.nextQuestion).not.toBe(INTAKE_AXES[2].question);
+    expect(result.questionContext).toBe(validDecision().questionContext);
 
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe("https://openrouter.ai/api/v1/chat/completions");
@@ -113,6 +157,8 @@ describe("adaptive interview route", () => {
           nextSection: axes[3].section,
           nextQuestion:
             "افراد از نخستین برخورد تا ایجاد تغییر، چه تجربه‌ای خواهند داشت؟",
+          questionContext:
+            "روشن‌شدن تجربهٔ افراد از راهکار کمک می‌کند بفهمیم تغییر موردنظر در عمل چگونه رخ می‌دهد.",
         }),
       ),
     );
@@ -297,6 +343,7 @@ describe("adaptive interview route", () => {
     expect(result.mode).toBe("demo");
     expect(result.nextQuestion).toContain("چراغ مسیر پیاده‌رو شب‌ها خاموش می‌ماند");
     expect(result.nextQuestion).toContain(INTAKE_AXES[1].question);
+    expect(result.questionContext).toContain("نیازهای واقعی");
     expect(result.nextSection).toBe(INTAKE_AXES[1].section);
     expect(result.stageComplete).toBe(false);
   });
@@ -321,6 +368,7 @@ describe("adaptive interview route", () => {
     expect(result.stageComplete).toBe(true);
     expect(result.nextSection).toBeNull();
     expect(result.nextQuestion).toBeNull();
+    expect(result.questionContext).toBeNull();
   });
 
   it("completes the final development axis without a follow-up question", async () => {
@@ -344,6 +392,7 @@ describe("adaptive interview route", () => {
     expect(response.status).toBe(200);
     expect(result.stageComplete).toBe(true);
     expect(result.nextQuestion).toBeNull();
+    expect(result.questionContext).toBeNull();
   });
 
   it("rejects malformed or inconsistent participant requests", async () => {
