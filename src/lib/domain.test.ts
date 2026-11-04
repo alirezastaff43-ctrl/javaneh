@@ -179,7 +179,7 @@ describe("demo domain rules", () => {
     expect(
       new Date(deferred.confirmationDeadlineAt!).getTime() - now.getTime(),
     ).toBe(72 * 60 * 60 * 1000);
-    expect(formatDate(storedDeadline!)).toMatch(/Jan \d{1,2}, 2026/);
+      expect(formatDate(storedDeadline!)).toMatch(/۱۴۰۴/);
     expect(deferred.confirmationDeadlineAt).toBe(storedDeadline);
     expect(
       applyDeadlineTransitions(

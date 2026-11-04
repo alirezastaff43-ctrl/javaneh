@@ -7,9 +7,9 @@ import {
   type InterviewRequest,
 } from "./interviewer";
 
-describe("English interview questions", () => {
+describe("Persian interview questions", () => {
   it.each(["initial", "development"] as const)(
-    "keeps every %s demo question valid and in English",
+    "keeps every %s fallback question valid and in Persian",
     (stage: InterviewStage) => {
       const axes = axesForStage(stage);
       for (const [index, axis] of axes.entries()) {
@@ -19,7 +19,7 @@ describe("English interview questions", () => {
           section: axis.section,
           index,
           question: axis.question,
-          answer: "I am not sure yet.",
+          answer: "هنوز مطمئن نیستم.",
           answeredSections: axes.slice(0, index + 1).map((item) => item.section),
           skippedSections: [],
           remainingSections: axes
@@ -39,7 +39,7 @@ describe("English interview questions", () => {
     },
   );
 
-  it("keeps English answers intact in the demo mentor's personalized follow-up", () => {
+  it("keeps a participant's answer intact in the localized follow-up", () => {
     const axes = axesForStage("initial");
     const request: InterviewRequest = {
       seed: "A community issue",
@@ -47,7 +47,7 @@ describe("English interview questions", () => {
       section: axes[0].section,
       index: 0,
       question: axes[0].question,
-      answer: "The park light is broken at night",
+      answer: "چراغ پارک شب‌ها خاموش می‌ماند",
       answeredSections: [axes[0].section],
       skippedSections: [],
       remainingSections: axes.slice(1).map((axis) => axis.section),
@@ -55,9 +55,7 @@ describe("English interview questions", () => {
     };
     const decision = createDemoDecision(request);
 
-    expect(decision.nextQuestion).toContain(
-      "You mentioned “The park light is broken at night.”",
-    );
+    expect(decision.nextQuestion).toContain("چراغ پارک شب‌ها خاموش می‌ماند");
     expect(validateInterviewDecision(decision, request)).toBe(true);
   });
 });

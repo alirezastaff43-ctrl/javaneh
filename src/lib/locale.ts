@@ -6,7 +6,7 @@ export function normalizeDigits(value: string): string {
 }
 
 export function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US-u-nu-latn", {
+  return new Intl.NumberFormat("fa-IR-u-nu-arabext", {
     maximumFractionDigits: 0,
   }).format(value);
 }
@@ -14,7 +14,7 @@ export function formatNumber(value: number): string {
 export function formatDate(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) throw new RangeError("Invalid date");
-  return new Intl.DateTimeFormat("en-US-u-nu-latn", {
+  return new Intl.DateTimeFormat("fa-IR-u-ca-persian-nu-arabext", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
@@ -22,4 +22,8 @@ export function formatDate(value: string): string {
 
 export function isEnglishText(value: string): boolean {
   return !/[^\u0000-\u024f\u2000-\u206f]/u.test(value);
+}
+
+export function isPersianText(value: string): boolean {
+  return /[\u0600-\u06ff]/u.test(value);
 }

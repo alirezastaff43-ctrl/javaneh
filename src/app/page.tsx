@@ -36,7 +36,7 @@ import {
 import {
   formatDate,
   formatNumber,
-  isEnglishText,
+  isPersianText,
   normalizeDigits,
 } from "@/lib/locale";
 import {
@@ -75,96 +75,103 @@ type Screen =
   | "submitted";
 const labels = {
   statuses: {
-    initial: "Idea started",
-    "in-development": "In development",
-    "awaiting-confirmation": "Awaiting confirmation",
-    submitted: "Submitted",
+    initial: "تازه‌شروع‌شده",
+    "in-development": "در حال توسعه",
+    "awaiting-confirmation": "در انتظار تأیید",
+    submitted: "ارسال‌شده",
   },
   localNotice:
-    "Your ideas and answers are saved only in this browser and are not synced across devices. Clearing browser data may permanently remove them.",
+    "ایده‌ها و پاسخ‌های شما فقط در فضای ذخیره‌سازی همین مرورگر نگهداری می‌شوند و بین دستگاه‌ها همگام‌سازی نمی‌شوند. پاک‌کردن داده‌های مرورگر ممکن است آن‌ها را برای همیشه حذف کند.",
 };
 
 function mentorFailureMessage(payload: unknown): string {
   if (payload && typeof payload === "object" && "code" in payload) {
     switch (payload.code) {
       case "provider_rate_limited":
-        return "The mentor service is temporarily busy. Your answer is saved; please wait a moment and try again.";
+        return "راهنمای هوشمند موقتاً مشغول است. پاسخ شما ذخیره شده؛ کمی صبر کنید و دوباره تلاش کنید.";
       case "provider_timeout":
-        return "Preparing the next question took too long. Your answer is saved; please try again.";
+        return "آماده‌کردن پرسش بعدی بیش از حد طول کشید. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.";
       case "provider_unavailable":
-        return "The mentor service is temporarily unavailable. Your answer is saved; please try again shortly.";
+        return "راهنمای هوشمند موقتاً در دسترس نیست. پاسخ شما ذخیره شده؛ کمی بعد دوباره تلاش کنید.";
       case "provider_authentication":
       case "provider_configuration":
-        return "The mentor service settings need attention. Your answer has been saved.";
+        return "تنظیمات راهنمای هوشمند نیاز به بررسی دارد. پاسخ شما ذخیره شده است.";
       case "provider_request_rejected":
-        return "The mentor service could not accept the request. Your answer is saved; the model settings may need attention.";
+        return "راهنمای هوشمند نتوانست درخواست را بپذیرد. پاسخ شما ذخیره شده و تنظیمات سرویس باید بررسی شود.";
       case "provider_invalid_response":
-        return "The next question could not be prepared. Your answer is saved; please try again.";
+        return "پرسش بعدی آماده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.";
     }
   }
   if (payload && typeof payload === "object" && "error" in payload) {
-    if (typeof payload.error === "string") return payload.error;
+    if (typeof payload.error === "string" && isPersianText(payload.error))
+      return payload.error;
   }
-  return "The next question could not be prepared. Your answer is saved; please try again.";
+  return "پرسش بعدی آماده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.";
 }
 
 const sectionLabels: Record<string, string> = {
-  "The problem": "The problem",
-  "People affected": "People affected",
-  "What is known": "What is known",
-  "Your idea": "Your idea",
-  "Your connection": "Your connection",
-  Evidence: "Evidence",
-  Stakeholders: "Stakeholders",
-  "Root causes": "Root causes",
-  Solution: "Solution",
-  Feasibility: "Feasibility",
-  Pilot: "Pilot",
-  Outcomes: "Outcomes",
-  "Inclusion and risk": "Inclusion and risk",
-  Delivery: "Delivery",
-  "Next actions": "Next actions",
+  "The problem": "مسئله",
+  "People affected": "افراد درگیر",
+  "What is known": "دانسته‌ها",
+  "Your idea": "ایدهٔ تو",
+  "Your connection": "ارتباط تو با مسئله",
+  Evidence: "شواهد",
+  Stakeholders: "افراد و گروه‌های مرتبط",
+  "Root causes": "ریشه‌های مسئله",
+  Solution: "راهکار",
+  Feasibility: "امکان‌پذیری",
+  Pilot: "اجرای آزمایشی",
+  Outcomes: "نتایج",
+  "Inclusion and risk": "مشارکت و خطرها",
+  Delivery: "اجرا",
+  "Next actions": "گام‌های بعدی",
 };
 
 const proposalLabels: Record<string, string> = {
-  summary: "Short summary",
-  problem: "Problem and evidence",
-  beneficiaries: "People who benefit",
-  solution: "Proposed solution",
-  impact: "Expected social impact",
-  evidence: "Evidence and assumptions",
-  feasibility: "Feasibility and resources",
-  pilot: "Pilot and next steps",
-  measurement: "Measurement",
-  risks: "Risks and mitigations",
-  openQuestions: "Open questions",
+  summary: "خلاصهٔ کوتاه",
+  problem: "مسئله و شواهد",
+  beneficiaries: "افراد بهره‌مند",
+  solution: "راهکار پیشنهادی",
+  impact: "تأثیر اجتماعی مورد انتظار",
+  evidence: "شواهد و فرض‌ها",
+  feasibility: "امکان‌پذیری و منابع",
+  pilot: "اجرای آزمایشی و گام‌های بعدی",
+  measurement: "سنجش نتایج",
+  risks: "خطرها و راه‌های کاهش آن‌ها",
+  openQuestions: "پرسش‌های بی‌پاسخ",
 };
 
 function displaySection(section: string) {
   const knownSection = Object.keys(sectionLabels).find(
     (label) => label.toLowerCase() === section.toLowerCase(),
   );
-  return knownSection ? sectionLabels[knownSection] : section;
+  return knownSection
+    ? sectionLabels[knownSection]
+    : isPersianText(section)
+      ? section
+      : "بخش دیگر";
 }
 
 function displayTokenReason(reason: string) {
   const knownReasons: Record<string, string> = {
-    "Initial registration confirmed": "Initial idea confirmed",
-    "Mentor development completed": "Idea development completed",
-    "Proposal reviewed": "Proposal reviewed",
+    "Initial registration confirmed": "ثبت اولیهٔ ایده تأیید شد",
+    "Mentor development completed": "توسعهٔ ایده کامل شد",
+    "Proposal reviewed": "پیشنهاد بازبینی شد",
   };
   if (knownReasons[reason]) return knownReasons[reason];
   const prefix = "Thoughtful progress: ";
   return reason.startsWith(prefix)
-    ? `Thoughtful progress: ${displaySection(reason.slice(prefix.length))}`
-    : reason;
+    ? `پیشرفت در بخش ${displaySection(reason.slice(prefix.length))}`
+    : isPersianText(reason)
+      ? reason
+      : "پیشرفت در مسیر پرورش ایده";
 }
 
 function displayProposalText(value: string) {
   return value === "Not yet explored with the participant." ||
     value ===
       "\u0627\u06cc\u0646\u0020\u0645\u0648\u0631\u062f\u0020\u0647\u0646\u0648\u0632\u0020\u0628\u0631\u0631\u0633\u06cc\u0020\u0646\u0634\u062f\u0647\u0020\u0627\u0633\u062a\u002e"
-    ? "Not explored yet."
+    ? "هنوز بررسی نشده است."
     : value;
 }
 
@@ -217,7 +224,7 @@ function newIdea(seed: string): Idea {
       .trim()
       .replace(/\s+/g, " ")
       .slice(0, 48)
-      .replace(/[.!?]$/, "") || "Untitled idea";
+      .replace(/[.!?؟]$/, "") || "ایدهٔ بدون عنوان";
   return {
     id: makeId(),
     title,
@@ -246,7 +253,7 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
     idea.pendingTurn?.stage === stage &&
     idea.pendingTurn.index === index &&
     idea.pendingTurn.section === base.section &&
-    isEnglishText(idea.pendingTurn.question)
+    isPersianText(idea.pendingTurn.question)
   )
     return { ...base, question: idea.pendingTurn.question };
   if (
@@ -254,7 +261,7 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
     idea.mentorNextQuestion.index === index &&
     (!idea.mentorNextQuestion.section ||
       idea.mentorNextQuestion.section === base.section) &&
-    isEnglishText(idea.mentorNextQuestion.text)
+    isPersianText(idea.mentorNextQuestion.text)
   ) {
     return { ...base, question: idea.mentorNextQuestion.text };
   }
@@ -262,14 +269,14 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
     idea.editingProgress?.stage === stage &&
     idea.editingProgress.index === index &&
     existing &&
-    isEnglishText(existing.question)
+    isPersianText(existing.question)
   )
     return { ...base, question: existing.question };
   if (idea.draftAnswer) return base;
   if (stage === "initial" && index === 0 && idea.seed.length > 20) {
     return {
       ...base,
-      question: `You mentioned “${idea.seed.slice(0, 95)}${idea.seed.length > 95 ? "…" : ""}.” When or where do you see this problem specifically?`,
+      question: `گفتی «${idea.seed.slice(0, 95)}${idea.seed.length > 95 ? "…" : ""}». این مسئله را دقیقاً کجا یا چه زمانی می‌بینی؟`,
     };
   }
   return base;
@@ -328,7 +335,7 @@ export default function Home() {
   const [activeId, setActiveId] = useState("");
   const [draftAnswer, setDraftAnswer] = useState("");
   const [mentorMessage, setMentorMessage] = useState(
-    "I’m here to help, one step at a time. You do not need to have every answer yet.",
+    "قدم‌به‌قدم همراهت هستم. لازم نیست از همین حالا پاسخ همهٔ پرسش‌ها را بدانی.",
   );
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -348,7 +355,7 @@ export default function Home() {
     } catch {
       commitState(emptyState());
       setStorageError(
-        "Browser storage is unavailable or saved data could not be read. Changes in this session may be lost when you reload.",
+        "فضای ذخیره‌سازی مرورگر در دسترس نیست یا داده‌های ذخیره‌شده خوانده نشدند. ممکن است تغییرات این نشست پس از بارگذاری دوباره از دست بروند.",
       );
     }
     setReady(true);
@@ -360,7 +367,7 @@ export default function Home() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {
       setStorageError(
-        "Changes could not be saved in this browser and may be lost after reloading. Check your browser's storage access and available space.",
+        "تغییرات در این مرورگر ذخیره نشدند و ممکن است پس از بارگذاری دوباره از دست بروند. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
       );
     }
   }, [state, ready]);
@@ -407,9 +414,9 @@ export default function Home() {
         newEntries
           .map(
             (entry) =>
-              `+${formatNumber(entry.amount)} tokens · ${displayTokenReason(entry.reason)}`,
+              `\u2068+${formatNumber(entry.amount)}\u2069 توکن · ${displayTokenReason(entry.reason)}`,
           )
-          .join("; "),
+          .join("؛ "),
       );
   }
 
@@ -442,9 +449,9 @@ export default function Home() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
     } catch {
-      setFormError("Your answer could not be saved in this browser. Check storage and try again.");
+      setFormError("پاسخ شما ذخیره نشد. فضای ذخیره‌سازی مرورگر را بررسی و دوباره تلاش کنید.");
       setStorageError(
-        "Browser storage failed. Check your browser's storage access and available space.",
+        "ذخیره‌سازی مرورگر با خطا روبه‌رو شد. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
       );
       return null;
     }
@@ -455,7 +462,7 @@ export default function Home() {
   function deleteIdea(idea: Idea) {
     if (
       !window.confirm(
-        `Are you sure you want to delete “${idea.title}” and all of its saved answers?`,
+        `از حذف «${idea.title}» و همهٔ پاسخ‌های ذخیره‌شدهٔ آن مطمئن هستید؟`,
       )
     )
       return;
@@ -464,9 +471,9 @@ export default function Home() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
     } catch {
-      setFormError("The idea could not be deleted from this browser. Check storage and try again.");
+      setFormError("ایده از مرورگر حذف نشد. فضای ذخیره‌سازی را بررسی و دوباره تلاش کنید.");
       setStorageError(
-        "Browser storage failed. Check your browser's storage access and available space.",
+        "ذخیره‌سازی مرورگر با خطا روبه‌رو شد. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
       );
       return;
     }
@@ -483,12 +490,12 @@ export default function Home() {
 
   function startIdea() {
     if (!seed.trim()) {
-      setFormError("Write a few words about the problem or your idea to continue.");
+      setFormError("برای ادامه، چند کلمه دربارهٔ مسئله یا ایده‌تان بنویسید.");
       return;
     }
     if (!canCreateIdea(state)) {
       setFormError(
-        "You have reached the three-idea limit. Your saved ideas are still available.",
+        "به سقف سه ایده رسیده‌اید. ایده‌های ذخیره‌شدهٔ شما همچنان در دسترس‌اند.",
       );
       return;
     }
@@ -500,7 +507,7 @@ export default function Home() {
       setDraftAnswer("");
       setReviewDraft({});
       setMentorMessage(
-        "We’ll develop your idea in your own words, one practical question at a time.",
+        "ایده‌تان را با همان واژه‌های خودتان و با پرسش‌هایی کاربردی، قدم‌به‌قدم پرورش می‌دهیم.",
       );
       setScreen("intake");
     } else {
@@ -513,15 +520,15 @@ export default function Home() {
     const digits = normalizeDigits(mobile).replace(/\D/g, "");
     const identityDigits = normalizeDigits(nationalId).replace(/\D/g, "");
     if (!firstName.trim() || !lastName.trim()) {
-      setFormError("Enter your first and last name.");
+      setFormError("نام و نام خانوادگی‌تان را وارد کنید.");
       return;
     }
     if (identityDigits.length < 6 || identityDigits.length > 20) {
-      setFormError("The national ID must contain between 6 and 20 digits.");
+      setFormError("کد ملی باید بین ۶ تا ۲۰ رقم داشته باشد.");
       return;
     }
     if (digits.length < 8 || digits.length > 15) {
-      setFormError("The mobile number must contain between 8 and 15 digits.");
+      setFormError("شمارهٔ همراه باید بین ۸ تا ۱۵ رقم داشته باشد.");
       return;
     }
     setMaskedMobile(
@@ -534,7 +541,7 @@ export default function Home() {
   function verifyCode(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!/^\d{4,8}$/.test(normalizeDigits(code))) {
-      setFormError("Enter a 4–8 digit number to continue.");
+      setFormError("برای ادامه، عددی ۴ تا ۸ رقمی وارد کنید.");
       return;
     }
     const idea = newIdea(seed);
@@ -549,7 +556,7 @@ export default function Home() {
     }));
     setActiveId(idea.id);
     setMentorMessage(
-      "Thanks for starting with what you noticed. We’ll keep your words as written and take one practical question at a time.",
+      "ممنون که از چیزی که دیده‌اید شروع کردید. نوشتهٔ شما را همان‌طور حفظ می‌کنیم و هر بار یک پرسش کاربردی می‌پرسیم.",
     );
     setNationalId("");
     setMobile("");
@@ -572,7 +579,7 @@ export default function Home() {
     const pending = storedPending
       ? {
           ...storedPending,
-          question: isEnglishText(storedPending.question)
+          question: isPersianText(storedPending.question)
             ? storedPending.question
             : getQuestion(activeIdea, stage).question,
         }
@@ -580,7 +587,7 @@ export default function Home() {
     const answerText = (override ?? draftAnswer).trim();
     if (!pending && !answerText) {
       setFormError(
-        "Write a short answer, or choose “I’m not sure yet” to continue.",
+        "پاسخی کوتاه بنویسید یا برای ادامه گزینهٔ «هنوز مطمئن نیستم» را انتخاب کنید.",
       );
       return;
     }
@@ -599,7 +606,7 @@ export default function Home() {
         const axes = axesForStage(stage);
         const currentAxis = axes[index];
         if (!currentAxis) {
-          setFormError("This stage is complete.");
+          setFormError("این مرحله کامل شده است.");
           return;
         }
         const previous = activeIdea.answers.find(
@@ -714,9 +721,9 @@ export default function Home() {
           body: JSON.stringify(interviewRequest),
         });
       } catch {
-        setMentorMessage("Your answer is saved.");
+        setMentorMessage("پاسخت ذخیره شد.");
         setFormError(
-          "The connection to the mentor service was lost. Your answer is saved; please try again.",
+          "ارتباط با راهنمای هوشمند قطع شد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.",
         );
         return;
       }
@@ -724,9 +731,9 @@ export default function Home() {
       try {
         payload = await response.json();
       } catch {
-        setMentorMessage("Your answer is saved.");
+        setMentorMessage("پاسخت ذخیره شد.");
         setFormError(
-          "The mentor service response could not be read. Your answer is saved; please try again.",
+          "پاسخ راهنمای هوشمند خوانده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.",
         );
         return;
       }
@@ -738,7 +745,7 @@ export default function Home() {
         (payload.mode !== "provider" && payload.mode !== "demo") ||
         !validateInterviewDecision(payload, interviewRequest)
       ) {
-        setMentorMessage("Your answer is saved.");
+        setMentorMessage("پاسخت ذخیره شد.");
         setFormError(mentorFailureMessage(payload));
         return;
       }
@@ -778,7 +785,7 @@ export default function Home() {
           : completedIdea;
       const savedFinalIdea = saveIdeaImmediately(finalIdea);
       if (!savedFinalIdea) {
-        setFormError("Your answer is saved, but the next step could not be saved. Please try again.");
+        setFormError("پاسخ شما ذخیره شده، اما گام بعدی ذخیره نشد. دوباره تلاش کنید.");
         return;
       }
       announceNewToken(activeIdea, savedFinalIdea);
@@ -819,7 +826,7 @@ export default function Home() {
     if (idea.status === "initial")
       updateIdea({ ...idea, status: "in-development", stage: "development" });
     setMentorMessage(
-      "Let’s make your idea more practical by separating what you have observed from what still needs to be tested.",
+      "بیایید ایده‌تان را کاربردی‌تر کنیم و آنچه مشاهده کرده‌اید از مواردی که هنوز باید آزموده شوند جدا کنیم.",
     );
     setScreen("develop");
   }
@@ -971,11 +978,11 @@ export default function Home() {
 
   if (!ready)
     return (
-      <main className="loading-screen" aria-label="Loading Javaneh">
+      <main className="loading-screen" aria-label="در حال آماده‌سازی جوانه">
         <span className="loading-mark">
           <Sprout size={24} />
         </span>
-        <span>Getting your idea space ready…</span>
+        <span>فضای ایدهٔ شما در حال آماده‌شدن است…</span>
       </main>
     );
 
@@ -989,7 +996,7 @@ export default function Home() {
         <button
           className={`brand${screen === "home" || screen === "intake" ? " landing-brand" : ""}`}
           onClick={() => setScreen("home")}
-          aria-label="Javaneh home"
+          aria-label="صفحهٔ اصلی جوانه"
         >
           <span
             className={`brand-mark${screen === "home" || screen === "intake" ? " landing-brand-mark" : ""}`}
@@ -1006,31 +1013,30 @@ export default function Home() {
             </span>
             {(screen === "home" || screen === "intake") && (
               <>
-                <span className="brand-subtitle">National Social Innovation Event</span>
-                <span className="landing-demo-badge">Local demo</span>
+                <span className="brand-subtitle">رویداد ملی نوآوری اجتماعی</span>
               </>
             )}
           </span>
         </button>
         {screen === "home" || screen === "intake" ? (
           <>
-            <nav className="landing-nav" aria-label="Main navigation">
+            <nav className="landing-nav" aria-label="پیمایش اصلی">
               <a
                 className={screen === "home" ? "is-active" : ""}
                 href={screen === "home" ? "#about" : "#intake-stage"}
               >
-                About
+                دربارهٔ رویداد
               </a>
               <a
                 className={screen === "intake" ? "is-active" : ""}
                 href={screen === "home" ? "#how-it-works" : "#intake-conversation"}
               >
-                How It Works
+                روند کار
               </a>
               <a href={screen === "home" ? "#benefits" : "#intake-tokens"}>
-                Benefits
+                دستاوردها
               </a>
-              <a href={screen === "home" ? "#faq" : "#intake-faq"}>FAQ</a>
+              <a href={screen === "home" ? "#faq" : "#intake-faq"}>پرسش‌های متداول</a>
             </nav>
             <div className="landing-actions">
               <button
@@ -1038,7 +1044,7 @@ export default function Home() {
                 onClick={() => setScreen("dashboard")}
               >
                 <BookOpenText size={17} aria-hidden="true" />
-                <span>My Ideas</span>
+                <span>ایده‌های من</span>
               </button>
               <button
                 className="landing-signup"
@@ -1050,33 +1056,25 @@ export default function Home() {
                   }
                 }}
               >
-                {screen === "home" ? "Start an Idea" : "Continue"}
+                {screen === "home" ? "شروع یک ایده" : "ادامه"}
                 <ArrowRight size={16} aria-hidden="true" />
               </button>
             </div>
           </>
         ) : (
           <div className="topbar-right">
-            <span className="local-chip">
-              <span className="status-dot" />
-              Local demo
-            </span>
             {state.profile?.verified && (
               <button
                 className="text-button"
                 onClick={() => setScreen("dashboard")}
               >
-                <BookOpenText size={17} /> My ideas
+                <BookOpenText size={17} /> ایده‌های من
               </button>
             )}
           </div>
         )}
       </header>
 
-      <div className={`notice-strip${screen === "intake" ? " intake-hidden" : ""}`}>
-        <ShieldCheck size={15} />
-        <span>{labels.localNotice}</span>
-      </div>
       {storageError && (
         <p className="storage-error" role="alert">
           <CircleHelp size={16} />
@@ -1095,7 +1093,7 @@ export default function Home() {
       </div>
       <span className="sr-only" aria-live="polite">
         {activeIdea
-          ? `${formatNumber(totalTokens)} tokens earned for this idea.`
+          ? `برای این ایده ${formatNumber(totalTokens)} توکن گرفته‌اید.`
           : ""}
       </span>
 
@@ -1107,10 +1105,10 @@ export default function Home() {
               <Sprout className="landing-title-sprout" size={40} strokeWidth={2} aria-hidden="true" />
             </h1>
             <p className="landing-subtitle">
-              National <em>Social Innovation</em> Event
+              رویداد ملی <em>نوآوری اجتماعی</em>
             </p>
             <p className="home-intro landing-intro">
-              Share your ideas. Build a better tomorrow together.
+              ایده‌هایتان را به اشتراک بگذارید؛ فردایی بهتر را با هم بسازیم.
             </p>
           </div>
           <div className="composer-wrap landing-composer" id="how-it-works">
@@ -1121,12 +1119,12 @@ export default function Home() {
               <span className="landing-entry-divider" aria-hidden="true" />
               <div className="landing-input-wrap">
                 <label className="sr-only" htmlFor="idea-seed">
-                  Describe your idea in your own words
+                  ایده‌تان را با واژه‌های خودتان توضیح دهید
                 </label>
                 <textarea
                   id="idea-seed"
                   className="seed-input landing-seed-input"
-                  placeholder="Write your idea here..."
+                  placeholder="ایده‌تان را اینجا بنویسید…"
                   value={seed}
                   onChange={(event) => {
                     setSeed(event.target.value);
@@ -1142,7 +1140,7 @@ export default function Home() {
                 className="primary-button composer-action landing-submit"
                 onClick={startIdea}
                 disabled={!seed.trim() || !canCreateIdea(state)}
-                aria-label="Start developing your idea"
+                aria-label="شروع پرورش ایده"
               >
                 <ArrowRight size={30} strokeWidth={1.8} aria-hidden="true" />
               </button>
@@ -1150,9 +1148,9 @@ export default function Home() {
             <div className="composer-meta landing-composer-meta">
               <span id="seed-hint">
                 <Info size={16} aria-hidden="true" />
-                Share your idea and take the first step toward innovation
+                ایده‌تان را بنویسید و نخستین گام را برای نوآوری بردارید
               </span>
-              {seed && <span>{formatNumber(seed.length)}/1,200</span>}
+              {seed && <span>{formatNumber(seed.length)}/{formatNumber(1200)}</span>}
             </div>
             {formError && (
               <p className="inline-error" id="seed-error" role="alert">
@@ -1161,51 +1159,49 @@ export default function Home() {
             )}
             {!formError && (
               <p className="sr-only" id="seed-error">
-                Describe a community problem or idea. Maximum 1,200 characters.
+                مسئله‌ای اجتماعی یا ایده‌تان را بنویسید. حداکثر ۱۲۰۰ نویسه.
               </p>
             )}
             {!canCreateIdea(state) && (
               <p className="capacity-note">
-                This browser has reached its limit. Open one of your saved ideas to continue.
+                به سقف ایده‌ها رسیده‌اید. برای ادامه یکی از ایده‌های ذخیره‌شده را باز کنید.
               </p>
             )}
           </div>
           <div className="landing-benefits" id="benefits">
             <div className="landing-benefit">
               <Users size={27} strokeWidth={2.2} aria-hidden="true" />
-              <span>Open to Everyone</span>
+              <span>مشارکت برای همه</span>
             </div>
             <div className="landing-benefit">
               <Star size={27} strokeWidth={2.2} aria-hidden="true" />
-              <span>Earn Tokens</span>
+              <span>کسب امتیاز</span>
             </div>
             <div className="landing-benefit">
               <Check size={27} strokeWidth={2.2} aria-hidden="true" />
-              <span>Track Progress</span>
+              <span>پیگیری پیشرفت</span>
             </div>
             <div className="landing-benefit">
               <Sprout size={27} strokeWidth={2.2} aria-hidden="true" />
-              <span>Make an Impact</span>
+              <span>ایجاد تغییر</span>
             </div>
           </div>
-          <a className="landing-scroll" href="#faq" aria-label="Scroll to frequently asked questions">
+          <a className="landing-scroll" href="#faq" aria-label="رفتن به پرسش‌های متداول">
             <ChevronDown size={20} aria-hidden="true" />
           </a>
           <section className="landing-faq" id="faq" aria-labelledby="landing-faq-title">
-            <p className="landing-faq-kicker">A good idea can start small</p>
-            <h2 id="landing-faq-title">Frequently asked questions</h2>
+            <p className="landing-faq-kicker">هر ایدهٔ خوبی می‌تواند از قدمی کوچک آغاز شود</p>
+            <h2 id="landing-faq-title">پرسش‌های متداول</h2>
             <details>
-              <summary>Where is my idea saved?</summary>
+              <summary>ایدهٔ من کجا ذخیره می‌شود؟</summary>
               <p>
-                Your ideas and answers are saved only in this browser. They are
-                not synced across devices or sent to event organizers.
+                {labels.localNotice} هیچ اطلاعاتی برای برگزارکنندگان رویداد ارسال نمی‌شود.
               </p>
             </details>
             <details>
-              <summary>Does my idea need to be complete?</summary>
+              <summary>آیا ایده‌ام باید کامل باشد؟</summary>
               <p>
-                No. Start with a problem you have noticed; you can shape the
-                idea step by step with practical questions.
+                خیر. با مسئله‌ای که دیده‌اید شروع کنید و ایده را با پرسش‌های کاربردی، قدم‌به‌قدم شکل دهید.
               </p>
             </details>
           </section>
@@ -1215,34 +1211,30 @@ export default function Home() {
       {screen === "details" && (
         <section className="form-view narrow-view details-view">
           <button className="back-link" onClick={() => setScreen("home")}>
-            <ArrowLeft size={16} /> Back to your idea
+            <ArrowLeft size={16} /> بازگشت به ایده
           </button>
           <div className="eyebrow">
             <span className="eyebrow-line" />
-            Before you begin
+            پیش از شروع
           </div>
           <h1>
-            A little about <em>you.</em>
+            کمی دربارهٔ <em>شما</em>
           </h1>
           <p className="form-intro">
-            Your name identifies your profile in this browser. Your mobile
-            number and national ID are requested only for this demo step.
+            نام شما نمایه‌تان را در همین مرورگر مشخص می‌کند. شمارهٔ همراه و کد ملی فقط برای گذر از این مرحله درخواست می‌شوند.
           </p>
           <div className="privacy-panel">
             <ShieldCheck size={19} />
             <p>
-              <b>Privacy reminder</b>
+              <b>یادآوری حریم خصوصی</b>
               <br />
-              No SMS is sent, and no identity service is contacted. Your
-              national ID and mobile number are not saved or sent and are
-              discarded after this step. Only your name and verification status
-              remain in this browser.
+              پیامکی ارسال نمی‌شود و هیچ سرویس احراز هویتی فراخوانی نمی‌شود. کد ملی و شمارهٔ همراه شما ذخیره یا ارسال نمی‌شوند و پس از این مرحله کنار گذاشته می‌شوند. فقط نام و وضعیت عبور از این مرحله در همین مرورگر می‌ماند.
             </p>
           </div>
           <form className="details-form" onSubmit={submitDetails} noValidate>
             <div className="field-row">
               <label>
-                First name
+                نام
                 <input
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
@@ -1252,7 +1244,7 @@ export default function Home() {
                 />
               </label>
               <label>
-                Last name
+                نام خانوادگی
                 <input
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
@@ -1263,7 +1255,7 @@ export default function Home() {
               </label>
             </div>
             <label>
-              National ID
+              کد ملی
               <input
                 value={nationalId}
                 onChange={(e) =>
@@ -1280,7 +1272,7 @@ export default function Home() {
               />
             </label>
             <label>
-              Mobile number
+              شمارهٔ همراه
               <input
                 value={mobile}
                 onChange={(e) =>
@@ -1299,7 +1291,7 @@ export default function Home() {
               </p>
             )}
             <button className="primary-button" type="submit">
-              Continue <ArrowRight size={18} />
+              ادامه <ArrowRight size={18} />
             </button>
           </form>
         </section>
@@ -1314,27 +1306,27 @@ export default function Home() {
               setFormError("");
             }}
           >
-            <ArrowLeft size={16} /> Back to your details
+            <ArrowLeft size={16} /> بازگشت به اطلاعات
           </button>
           <div className="step-icon">
             <ShieldCheck size={24} />
           </div>
           <div className="eyebrow">
             <span className="eyebrow-line" />
-            Demo verification
+            تأیید این مرحله
           </div>
           <h1>
-            Continue with any code <em>you choose.</em>
+            با کدی که <em>خودتان انتخاب می‌کنید</em> ادامه دهید
           </h1>
           <p className="form-intro">
-            No real text message will be sent. This is a demo code; enter any 4–8 digit number to continue.
+            پیامک واقعی ارسال نمی‌شود. برای ادامه، هر عددی بین ۴ تا ۸ رقم وارد کنید؛ این کد هویت شما را تأیید نمی‌کند.
           </p>
           <div className="masked-line">
-            Mobile number <bdi dir="ltr">{maskedMobile}</bdi>
+            شمارهٔ همراه <bdi dir="ltr">{maskedMobile}</bdi>
           </div>
           <form className="details-form" onSubmit={verifyCode} noValidate>
             <label htmlFor="verification-code">
-              Verification code
+              کد ادامه
               <input
                 id="verification-code"
                 value={code}
@@ -1343,7 +1335,7 @@ export default function Home() {
                 }
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                placeholder="For example, 1234"
+                placeholder="برای نمونه: ۱۲۳۴"
                 dir="ltr"
                 required
               />
@@ -1354,7 +1346,7 @@ export default function Home() {
               </p>
             )}
             <button className="primary-button" type="submit">
-              Continue <ArrowRight size={18} />
+              ادامه <ArrowRight size={18} />
             </button>
           </form>
         </section>
@@ -1363,29 +1355,29 @@ export default function Home() {
       {screen === "intake" && activeIdea && (
         <section className="journey-view intake-view">
           <button className="back-link intake-exit" onClick={() => setScreen("dashboard")}>
-            <ArrowLeft size={16} /> Save and exit
+            <ArrowLeft size={16} /> ذخیره و خروج
           </button>
           <div className="journey-head intake-head" id="intake-stage">
             <div>
               <div className="eyebrow intake-eyebrow">
                 <span className="eyebrow-line" />
-                Stage 1 · Initial intake
+                گام ۱ · ثبت اولیه
               </div>
               <h1>
-                Let’s <em>shape</em> your idea.
+                بیایید ایده‌تان را <em>شکل بدهیم</em>
               </h1>
               <p className="intake-intro">
-                A great idea can make a difference. Tell us about your idea in your own words.
+                یک ایدهٔ خوب می‌تواند تغییری ایجاد کند. ایده‌تان را با واژه‌های خودتان برایمان بنویسید.
               </p>
             </div>
             <span className="step-count">
-              {formatNumber(Math.min(initialIndex + 1, 5))} <span>/ 5</span>
+              {formatNumber(Math.min(initialIndex + 1, 5))} <span>/ {formatNumber(5)}</span>
             </span>
           </div>
           <div
             className="progress-track"
             role="progressbar"
-            aria-label="Initial intake progress"
+            aria-label="پیشرفت ثبت اولیه"
             aria-valuemin={0}
             aria-valuemax={5}
             aria-valuenow={Math.min(initialIndex, 5)}
@@ -1400,8 +1392,8 @@ export default function Home() {
                 <span className="mentor-avatar">
                   <Lightbulb size={26} strokeWidth={1.8} aria-hidden="true" />
                 </span>
-                <span>Idea conversation</span>
-                <span className="intake-start-badge">Start here</span>
+                <span>گفت‌وگو دربارهٔ ایده</span>
+                <span className="intake-start-badge">از اینجا شروع کنید</span>
               </div>
               <div className="mentor-message intake-mentor-message" aria-live="polite">
                 {!busy && <Sparkles size={16} aria-hidden="true" />}
@@ -1409,7 +1401,7 @@ export default function Home() {
                   <span className="thinking">
                     <i />
                     <i />
-                    <i /> Preparing the next question
+                    <i /> در حال آماده‌کردن پرسش بعدی
                   </span>
                 ) : (
                   mentorMessage.slice(0, 120)
@@ -1424,12 +1416,12 @@ export default function Home() {
                     <span className="question-kicker">
                       {initialIndex < 5
                         ? displaySection(currentQuestion.section)
-                        : "Ready to review"}
+                        : "آمادهٔ بازبینی"}
                     </span>
                     <h2>
                       {initialIndex < 5
                         ? currentQuestion.question
-                        : "Your initial summary is ready."}
+                        : "خلاصهٔ اولیهٔ ایده آماده است."}
                     </h2>
                   </div>
                 </div>
@@ -1437,7 +1429,7 @@ export default function Home() {
                 activeIdea.pendingTurn?.stage === "initial" ? (
                   <div className="pending-answer">
                     <p className="review-hint">
-                      Your answer is saved:
+                      پاسخ شما ذخیره شده است:
                     </p>
                     <p dir="auto">
                       <bdi>{activeIdea.pendingTurn.answer}</bdi>
@@ -1452,7 +1444,7 @@ export default function Home() {
                       onClick={() => answerCurrent("initial")}
                       disabled={busy}
                     >
-                      Try again <ArrowRight size={18} />
+                      تلاش دوباره <ArrowRight size={18} />
                     </button>
                     {pendingAnswer && (
                       <button
@@ -1460,14 +1452,14 @@ export default function Home() {
                         onClick={() => editAnswer(activeIdea, pendingAnswer)}
                         disabled={busy}
                       >
-                        Edit answer
+                        ویرایش پاسخ
                       </button>
                     )}
                   </div>
                 ) : initialIndex < 5 ? (
                   <>
                     <label className="sr-only" htmlFor="initial-answer">
-                      Your answer
+                      پاسخ شما
                     </label>
                     <textarea
                       id="initial-answer"
@@ -1482,7 +1474,7 @@ export default function Home() {
                       rows={4}
                       maxLength={1500}
                       dir="auto"
-                      placeholder="Take your time. A few honest sentences are enough."
+                      placeholder="با آرامش بنویسید؛ چند جملهٔ صادقانه کافی است."
                     />
                     <div className="answer-tools">
                       <button
@@ -1490,15 +1482,15 @@ export default function Home() {
                         onClick={() =>
                           answerCurrent(
                             "initial",
-                            "I’m not sure yet. I’d like to learn more before deciding.",
+                            "هنوز مطمئن نیستم. پیش از تصمیم‌گیری می‌خواهم بیشتر بدانم.",
                           )
                         }
                       >
-                        I’m not sure yet <CircleHelp size={15} />
+                        هنوز مطمئن نیستم <CircleHelp size={15} />
                       </button>
                       <span>
                         {formatNumber((draftAnswer || activeIdea.draftAnswer || "").length)}
-                        /1,500
+                        /{formatNumber(1500)}
                       </span>
                     </div>
                     {formError && (
@@ -1511,13 +1503,13 @@ export default function Home() {
                       onClick={() => answerCurrent("initial")}
                       disabled={busy}
                     >
-                      Save answer <ArrowRight size={18} />
+                      ثبت پاسخ <ArrowRight size={18} />
                     </button>
                   </>
                 ) : (
                   <>
                     <p className="review-hint">
-                      Review and edit this summary before confirming your initial intake.
+                      پیش از تأیید ثبت اولیه، این خلاصه را بررسی و ویرایش کنید.
                     </p>
                     <textarea
                       value={
@@ -1531,7 +1523,7 @@ export default function Home() {
                         })
                       }
                       rows={8}
-                      aria-label="Edit your initial idea summary"
+                      aria-label="ویرایش خلاصهٔ اولیهٔ ایده"
                       dir="auto"
                     />
                     {formError && (
@@ -1540,7 +1532,7 @@ export default function Home() {
                       </p>
                     )}
                     <button className="primary-button" onClick={confirmInitial}>
-                      Confirm initial intake <Check size={18} />
+                      تأیید ثبت اولیه <Check size={18} />
                     </button>
                   </>
                 )}
@@ -1553,7 +1545,7 @@ export default function Home() {
                 </div>
                 <div className="intake-starting-copy">
                   <div className="side-section-title">
-                    <span>Your starting point</span>
+                    <span>نقطهٔ شروع شما</span>
                   </div>
                   {seedEditOpen ? (
                     <form
@@ -1562,20 +1554,20 @@ export default function Home() {
                         event.preventDefault();
                         const nextSeed = seedEditDraft.trim();
                         if (!nextSeed) {
-                          setFormError("Your starting idea cannot be empty.");
+                          setFormError("ایدهٔ اولیه نمی‌تواند خالی باشد.");
                           return;
                         }
                         const title = nextSeed
                           .replace(/\s+/g, " ")
                           .slice(0, 48)
-                          .replace(/[.!?]$/, "") || "Untitled idea";
+                          .replace(/[.!?؟]$/, "") || "ایدهٔ بدون عنوان";
                         updateIdea({ ...activeIdea, seed: nextSeed, title });
                         setSeedEditOpen(false);
                         setFormError("");
                       }}
                     >
                       <label className="sr-only" htmlFor="starting-point-edit">
-                        Edit your starting idea
+                        ویرایش ایدهٔ اولیه
                       </label>
                       <textarea
                         id="starting-point-edit"
@@ -1603,10 +1595,10 @@ export default function Home() {
                             setFormError("");
                           }}
                         >
-                          Cancel
+                          انصراف
                         </button>
                         <button className="primary-button" type="submit">
-                          Save idea
+                          ذخیرهٔ ایده
                         </button>
                       </div>
                     </form>
@@ -1619,7 +1611,7 @@ export default function Home() {
                 {!seedEditOpen && (
                   <button
                     className="intake-edit-seed"
-                    aria-label="Edit your starting idea"
+                    aria-label="ویرایش ایدهٔ اولیه"
                     onClick={() => {
                       setSeedEditDraft(activeIdea.seed);
                       setSeedEditOpen(true);
@@ -1632,8 +1624,8 @@ export default function Home() {
               </div>
               <div className="side-divider" />
               <div className="side-section-title">
-                <span>Initial intake progress</span>
-                <span>{formatNumber(Math.min(initialIndex, 5))}/5</span>
+                <span>پیشرفت ثبت اولیه</span>
+                <span>{formatNumber(Math.min(initialIndex, 5))}/{formatNumber(5)}</span>
               </div>
               <div className="step-list">
                 {intakeQuestions.map((item, index) => (
@@ -1655,8 +1647,8 @@ export default function Home() {
               <div className="token-mini intake-token-mini" id="intake-tokens">
                 <span className="token-glyph"><Sparkles size={16} aria-hidden="true" /></span>
                 <span>
-                  <b>{formatNumber(totalTokens)} tokens</b>
-                  <small>Tokens are a demo-only score.</small>
+                  <b>{formatNumber(totalTokens)} توکن</b>
+                  <small>امتیاز مشارکت؛ غیررسمی</small>
                 </span>
               </div>
               <div className="answer-history">
@@ -1672,16 +1664,16 @@ export default function Home() {
                       <button
                         className="text-button"
                         onClick={() => editAnswer(activeIdea, answer)}
-                        aria-label={`Edit your answer about ${displaySection(answer.section)}`}
+                        aria-label={`ویرایش پاسخ شما دربارهٔ ${displaySection(answer.section)}`}
                       >
-                        Edit
+                        ویرایش
                       </button>
                     </div>
                   ))}
               </div>
               <details className="intake-privacy" id="intake-faq">
-                <summary>How is my idea saved?</summary>
-                <p>{labels.localNotice}</p>
+                <summary>حریم خصوصی و نگهداری اطلاعات</summary>
+                <p>{labels.localNotice} پاسخ‌ها برای راهنمای هوشمند پردازش می‌شوند و اطلاعات هویتی و شمارهٔ همراه پیش از ارسال حذف می‌شوند.</p>
               </details>
             </aside>
           </div>
@@ -1690,19 +1682,19 @@ export default function Home() {
 
       {screen === "dashboard" && (
         <section className="dashboard-view">
-          <aside className="dashboard-sidebar" aria-label="Workspace navigation">
+          <aside className="dashboard-sidebar" aria-label="پیمایش فضای کار">
             <button
               className="dashboard-sidebar-brand"
               onClick={() => setScreen("home")}
-              aria-label="Javaneh home"
+              aria-label="صفحهٔ اصلی جوانه"
             >
               <span className="dashboard-sidebar-mark">
                 <Sprout size={38} aria-hidden="true" />
               </span>
               <b>Javaneh</b>
-              <span>National Social<br />Innovation Event</span>
+              <span>رویداد ملی<br />نوآوری اجتماعی</span>
             </button>
-            <nav className="dashboard-nav" aria-label="Workspace">
+            <nav className="dashboard-nav" aria-label="فضای کار">
               <button
                 className="active"
                 onClick={() =>
@@ -1711,7 +1703,7 @@ export default function Home() {
                   })
                 }
               >
-                <House size={18} aria-hidden="true" /> Workspace
+                <House size={18} aria-hidden="true" /> نمای کلی
               </button>
               <button
                 onClick={() =>
@@ -1720,7 +1712,7 @@ export default function Home() {
                   })
                 }
               >
-                <FolderOpen size={18} aria-hidden="true" /> My Ideas
+                <FolderOpen size={18} aria-hidden="true" /> ایده‌های من
               </button>
               <button
                 onClick={() =>
@@ -1729,23 +1721,23 @@ export default function Home() {
                   })
                 }
               >
-                <Gift size={18} aria-hidden="true" /> Rewards
+                <Gift size={18} aria-hidden="true" /> امتیازها
               </button>
               <button
                 type="button"
                 disabled
-                title="Community features are not available in this local demo."
+                title="امکانات جامعهٔ کاربری هنوز در دسترس نیستند."
               >
-                <Users size={18} aria-hidden="true" /> Community
+                <Users size={18} aria-hidden="true" /> جامعهٔ کاربری
               </button>
               <a href="#workspace-faq">
-                <CircleHelp size={18} aria-hidden="true" /> FAQ
+                <CircleHelp size={18} aria-hidden="true" /> پرسش‌های متداول
               </a>
             </nav>
             <div className="dashboard-sidebar-promo">
               <Sprout size={23} aria-hidden="true" />
-              <b>Grow your ideas.</b>
-              <span>Make an impact.</span>
+              <b>ایده‌هایتان را پرورش دهید</b>
+              <span>تغییری ماندگار بسازید</span>
             </div>
           </aside>
 
@@ -1753,17 +1745,17 @@ export default function Home() {
             <div className="dashboard-utility">
               <span className="dashboard-local-state">
                 <span className="status-dot" />
-                Saved in this browser
+                فضای کار شما
               </span>
               <span
                 className="dashboard-bell"
-                aria-label="Notifications are not configured"
+                aria-label="اعلان‌ها هنوز راه‌اندازی نشده‌اند"
               >
                 <Bell size={19} aria-hidden="true" />
               </span>
               <span
                 className="dashboard-avatar"
-                aria-label={state.profile?.name || "Javaneh profile"}
+                aria-label={state.profile?.name || "نمایهٔ جوانه"}
               >
                 {profileInitials}
               </span>
@@ -1774,20 +1766,20 @@ export default function Home() {
                 <div>
                   <div className="eyebrow dashboard-eyebrow">
                     <span className="eyebrow-line" />
-                    Your Workspace
+                    فضای کار شما
                   </div>
                   <h1>
                     {state.profile?.name ? (
                       <>
-                        Welcome,{" "}
+                        خوش آمدید،{" "}
                         <bdi dir="auto">{state.profile.name.split(" ")[0]}</bdi>.
                       </>
                     ) : (
-                      <>Welcome, <em>innovator.</em></>
+                      <>خوش آمدید، <em>نوآور</em></>
                     )}
                   </h1>
                   <p className="form-intro">
-                    Your work is saved in this browser. Pick up where you left off.
+                    از همان‌جایی که مانده‌اید ادامه دهید.
                   </p>
                 </div>
               </div>
@@ -1807,15 +1799,14 @@ export default function Home() {
                   <Lightbulb size={22} aria-hidden="true" />
                 </span>
                 <div className="dashboard-stat-copy">
-                  <b>{formatNumber(activeIdeas.length)} <small>/ 3</small></b>
-                  <span>Ideas in progress</span>
+                  <b>{formatNumber(activeIdeas.length)} <small>/ {formatNumber(3)}</small></b>
+                  <span>ایده‌های در حال پیشرفت</span>
                   <small>
-                    {formatNumber(Math.max(0, 3 - totalIdeas))} more{" "}
-                    {3 - totalIdeas === 1 ? "idea" : "ideas"} available
+                    {formatNumber(Math.max(0, 3 - totalIdeas))} ایدهٔ دیگر در دسترس
                   </small>
                 </div>
                 <span className="dashboard-sparkline" aria-hidden="true" />
-                <a href="#ideas-list" aria-label="View your ideas">
+                <a href="#ideas-list" aria-label="مشاهدهٔ ایده‌ها">
                   <ArrowRight size={14} aria-hidden="true" />
                 </a>
               </article>
@@ -1825,8 +1816,8 @@ export default function Home() {
                 </span>
                 <div className="dashboard-stat-copy">
                   <b>{formatNumber(tokenTotal)}</b>
-                  <span>Tokens earned</span>
-                  <small>Demo-only score · Keep going!</small>
+                  <span>توکن‌های دریافت‌شده</span>
+                  <small>قدم‌به‌قدم ادامه دهید</small>
                 </div>
                 <BarChart3 className="dashboard-stat-chart" size={35} aria-hidden="true" />
               </article>
@@ -1835,15 +1826,15 @@ export default function Home() {
                   <Star size={22} aria-hidden="true" />
                 </span>
                 <div className="dashboard-stat-copy">
-                  <span>Your progress</span>
+                  <span>پیشرفت شما</span>
                   <b>
                     {formatNumber(Math.round(averageProgress / 10))}{" "}
-                    <small>/ 10 points</small>
+                    <small>از ۱۰ امتیاز</small>
                   </b>
                   <span
                     className="dashboard-progress-track"
                     role="progressbar"
-                    aria-label="Average idea progress"
+                    aria-label="میانگین پیشرفت ایده‌ها"
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={averageProgress}
@@ -1864,8 +1855,8 @@ export default function Home() {
                   <Plus size={26} aria-hidden="true" />
                 </span>
                 <span className="dashboard-new-idea-copy">
-                  <b>Start a new idea</b>
-                  <small>Turn your inspiration into an impactful idea.</small>
+                  <b>شروع ایده‌ای تازه</b>
+                  <small>جرقهٔ ذهنتان را به ایده‌ای اثرگذار تبدیل کنید.</small>
                 </span>
                 <span className="dashboard-circle-arrow">
                   <ArrowRight size={16} aria-hidden="true" />
@@ -1883,16 +1874,15 @@ export default function Home() {
                 <div className="dashboard-ideas-title">
                   <FolderOpen size={24} aria-hidden="true" />
                   <div>
-                    <h2>Your Ideas</h2>
+                    <h2>ایده‌های شما</h2>
                     <span>
-                      {formatNumber(totalIdeas)}{" "}
-                      {totalIdeas === 1 ? "idea" : "ideas"} saved on this device
+                      {formatNumber(totalIdeas)} ایده در این دستگاه ذخیره شده
                     </span>
                   </div>
                 </div>
                 <details className="dashboard-saved-details" id="workspace-faq">
                   <summary>
-                    Saved in this browser <ChevronDown size={15} aria-hidden="true" />
+                    محل نگهداری اطلاعات <ChevronDown size={15} aria-hidden="true" />
                   </summary>
                   <p>{labels.localNotice}</p>
                 </details>
@@ -1902,22 +1892,22 @@ export default function Home() {
               <span className="empty-icon">
                 <Sprout size={24} />
               </span>
-              <h3>Your first idea is waiting.</h3>
+              <h3>ایدهٔ اول شما منتظر است</h3>
               <p>
-                Start with something you have noticed. Your idea does not need to be complete.
+                از چیزی که توجهتان را جلب کرده شروع کنید؛ لازم نیست ایده کامل باشد.
               </p>
               <button
                 className="primary-button"
                 onClick={() => setScreen("home")}
               >
-                Write an idea <ArrowRight size={18} />
+                نوشتن یک ایده <ArrowRight size={18} />
               </button>
             </div>
           ) : (
             <div className="idea-list">
               {state.ideas.map((idea, index) => (
                 <article className="idea-row" key={idea.id}>
-                  <div className="idea-number">{formatNumber(index + 1).padStart(2, "0")}</div>
+                  <div className="idea-number">{formatNumber(index + 1).padStart(2, formatNumber(0))}</div>
                   <div className="idea-content">
                     <div className="idea-title-line">
                       <h3><bdi dir="auto">{idea.title}</bdi></h3>
@@ -1930,7 +1920,7 @@ export default function Home() {
                     <div className="idea-meta">
                       <span>
                         <Clock3 size={14} />
-                        Updated: {formatDate(idea.updatedAt)}
+                        به‌روزرسانی: {formatDate(idea.updatedAt)}
                       </span>
                       <span>
                         <Sparkles size={14} />
@@ -1938,20 +1928,20 @@ export default function Home() {
                           (sum, item) => sum + item.amount,
                           0,
                         ))}{" "}
-                        tokens
+                        توکن
                       </span>
                       <span>
                         <span
                           className="progress-mini"
                           role="progressbar"
-                          aria-label={`Progress for ${idea.title}`}
+                          aria-label={`پیشرفت ایدهٔ ${idea.title}`}
                           aria-valuemin={0}
                           aria-valuemax={100}
                           aria-valuenow={getProgress(idea)}
                         >
                           <i style={{ width: `${getProgress(idea)}%` }} />
                         </span>
-                        {formatNumber(getProgress(idea))}% complete
+                        {formatNumber(getProgress(idea))}٪ تکمیل‌شده
                       </span>
                     </div>
                     <div className="idea-progress-track">
@@ -1961,13 +1951,13 @@ export default function Home() {
                       className="token-history"
                       id={index === 0 ? "token-history" : undefined}
                     >
-                      <summary>Token history ({formatNumber(idea.tokens.length)})</summary>
+                      <summary>تاریخچهٔ توکن‌ها ({formatNumber(idea.tokens.length)})</summary>
                       {idea.tokens.length ? (
                         <ul>
                           {idea.tokens.map((token) => (
                             <li key={token.dedupeKey}>
                               <span>{displayTokenReason(token.reason)}</span>
-                              <b>+{formatNumber(token.amount)}</b>
+                              <bdi dir="ltr">+{formatNumber(token.amount)}</bdi>
                               <time className="token-date" dateTime={token.createdAt}>
                                 {formatDate(token.createdAt)}
                               </time>
@@ -1975,7 +1965,7 @@ export default function Home() {
                           ))}
                         </ul>
                       ) : (
-                        <p>No tokens earned yet. You earn tokens for each thoughtful answer.</p>
+                        <p>هنوز توکنی دریافت نکرده‌اید. با هر پاسخ سنجیده توکن می‌گیرید.</p>
                       )}
                     </details>
                   </div>
@@ -1988,14 +1978,14 @@ export default function Home() {
                           setScreen("submitted");
                         }}
                       >
-                        View proposal <FileText size={16} />
+                        مشاهدهٔ پیشنهاد <FileText size={16} />
                       </button>
                     ) : idea.status === "awaiting-confirmation" ? (
                       <button
                         className="secondary-button"
                         onClick={() => beginReview(idea)}
                       >
-                        Return to review <ArrowRight size={16} />
+                        بازگشت به بازبینی <ArrowRight size={16} />
                       </button>
                     ) : (
                       <button
@@ -2004,20 +1994,20 @@ export default function Home() {
                       >
                         {idea.status === "initial"
                           ? (idea.intakeIndex ?? 0) < 5
-                            ? "Continue initial intake"
-                            : "Review initial intake"
+                            ? "ادامهٔ ثبت اولیه"
+                            : "بازبینی ثبت اولیه"
                           : (idea.developmentIndex ?? 0) < 10
-                            ? "Continue developing your idea"
-                            : "Continue your idea journey"}
+                            ? "ادامهٔ توسعهٔ ایده"
+                            : "ادامهٔ مسیر ایده"}
                         <ArrowRight size={16} />
                       </button>
                     )}
                     <button
                       className="delete-idea-button"
                       onClick={() => deleteIdea(idea)}
-                      aria-label={`Delete idea ${idea.title}`}
+                      aria-label={`حذف ایدهٔ ${idea.title}`}
                     >
-                      Delete idea <Trash2 size={16} />
+                      حذف ایده <Trash2 size={16} />
                     </button>
                   </div>
                 </article>
@@ -2027,7 +2017,7 @@ export default function Home() {
           {totalIdeas === 3 && (
             <p className="limit-note">
               <LockKeyhole size={15} />
-              You have reached the three-idea limit. Your existing work remains available in this browser.
+              به سقف سه ایده رسیده‌اید. ایده‌های موجود همچنان در این مرورگر در دسترس‌اند.
             </p>
           )}
             </section>
@@ -2035,13 +2025,12 @@ export default function Home() {
               <div className="dashboard-mentor-heading">
                 <Sparkles size={26} aria-hidden="true" />
                 <div>
-                  <h2>Your Mentor</h2>
-                  <span>Guided idea development</span>
+                  <h2>راهنمای شما</h2>
+                  <span>همراهی در پرورش ایده</span>
                 </div>
               </div>
               <p>
-                Get thoughtful, step-by-step guidance as you shape and develop
-                your idea.
+                هنگام شکل‌دادن و توسعهٔ ایده، راهنمایی سنجیده و گام‌به‌گام بگیرید.
               </p>
               <button
                 className="dashboard-mentor-action"
@@ -2057,7 +2046,7 @@ export default function Home() {
               >
                 <MessageCircle size={18} aria-hidden="true" />
                 <span>
-                  {activeIdeas.length ? "Continue with Mentor" : "Start with Mentor"}
+                  {activeIdeas.length ? "ادامه با راهنما" : "شروع با راهنما"}
                 </span>
                 <ArrowRight size={16} aria-hidden="true" />
               </button>
@@ -2075,12 +2064,12 @@ export default function Home() {
               )}
               <span>{storageError || tokenNotice}</span>
               <a href="#workspace-faq">
-                Learn more <ArrowUpRight size={15} aria-hidden="true" />
+                اطلاعات بیشتر <ArrowUpRight size={15} aria-hidden="true" />
               </a>
             </div>
           )}
           <p className="dashboard-score-note">
-            Tokens are a demo-only score and are not an official event judging score.
+            توکن‌ها امتیاز مشارکت هستند و امتیاز رسمی داوری رویداد محسوب نمی‌شوند.
           </p>
           </div>
         </section>
@@ -2089,26 +2078,26 @@ export default function Home() {
       {screen === "develop" && activeIdea && (
         <section className="journey-view develop-view">
           <button className="back-link" onClick={() => setScreen("dashboard")}>
-            <ArrowLeft size={16} /> Save and exit
+            <ArrowLeft size={16} /> ذخیره و خروج
           </button>
           <div className="journey-head">
             <div>
               <div className="eyebrow">
                 <span className="eyebrow-line" />
-                Stage 2 · Idea development
+                گام ۲ · توسعهٔ ایده
               </div>
               <h1>
-                Make your idea <em>practical.</em>
+                ایده‌تان را <em>کاربردی کنید</em>
               </h1>
             </div>
             <span className="step-count">
-              {formatNumber(Math.min(devIndex + 1, 10))} <span>/ 10</span>
+              {formatNumber(Math.min(devIndex + 1, 10))} <span>/ {formatNumber(10)}</span>
             </span>
           </div>
           <div
             className="progress-track"
             role="progressbar"
-            aria-label="Idea development progress"
+            aria-label="پیشرفت توسعهٔ ایده"
             aria-valuemin={0}
             aria-valuemax={10}
             aria-valuenow={Math.min(devIndex, 10)}
@@ -2123,14 +2112,14 @@ export default function Home() {
                 <span className="mentor-avatar">
                   <Sparkles size={16} />
                 </span>
-                <span>Idea conversation</span>
+                <span>گفت‌وگو دربارهٔ ایده</span>
               </div>
               <div className="mentor-message" aria-live="polite">
                 {busy ? (
                   <span className="thinking">
                     <i />
                     <i />
-                    <i /> Preparing the next question
+                    <i /> در حال آماده‌کردن پرسش بعدی
                   </span>
                 ) : (
                   mentorMessage.slice(0, 120)
@@ -2138,18 +2127,18 @@ export default function Home() {
               </div>
               <div className="question-card">
                 <span className="question-kicker">
-                  {devIndex < 10 ? displaySection(devQuestion.section) : "Proposal ready"}
+                  {devIndex < 10 ? displaySection(devQuestion.section) : "پیشنهاد آماده است"}
                 </span>
                 <h2>
                   {devIndex < 10
                     ? devQuestion.question
-                    : "You have a thoughtful foundation for your proposal."}
+                    : "پایهٔ سنجیده‌ای برای پیشنهادتان آماده کرده‌اید."}
                 </h2>
                 {devIndex < 10 &&
                 activeIdea.pendingTurn?.stage === "development" ? (
                   <div className="pending-answer">
                     <p className="review-hint">
-                      Your answer is saved:
+                      پاسخ شما ذخیره شده است:
                     </p>
                     <p dir="auto">
                       <bdi>{activeIdea.pendingTurn.answer}</bdi>
@@ -2164,7 +2153,7 @@ export default function Home() {
                       onClick={() => answerCurrent("development")}
                       disabled={busy}
                     >
-                      Try again <ArrowRight size={18} />
+                      تلاش دوباره <ArrowRight size={18} />
                     </button>
                     {pendingAnswer && (
                       <button
@@ -2172,14 +2161,14 @@ export default function Home() {
                         onClick={() => editAnswer(activeIdea, pendingAnswer)}
                         disabled={busy}
                       >
-                        Edit answer
+                        ویرایش پاسخ
                       </button>
                     )}
                   </div>
                 ) : devIndex < 10 ? (
                   <>
                     <label className="sr-only" htmlFor="development-answer">
-                      Your answer
+                      پاسخ شما
                     </label>
                     <textarea
                       id="development-answer"
@@ -2194,7 +2183,7 @@ export default function Home() {
                       rows={4}
                       maxLength={1500}
                       dir="auto"
-                      placeholder="Share what you know, or note what you still need to explore."
+                      placeholder="آنچه می‌دانید بنویسید یا مشخص کنید چه چیزی را باید بیشتر بررسی کنید."
                     />
                     <div className="answer-tools">
                       <button
@@ -2202,15 +2191,15 @@ export default function Home() {
                         onClick={() =>
                           answerCurrent(
                             "development",
-                            "I’m not sure yet. I’ll ask the people affected what would work for them.",
+                            "هنوز مطمئن نیستم. از افراد درگیر می‌پرسم چه چیزی برایشان مناسب است.",
                           )
                         }
                       >
-                        I’m not sure yet / This won’t work for me <CircleHelp size={15} />
+                        هنوز مطمئن نیستم / این راهکار برای من مناسب نیست <CircleHelp size={15} />
                       </button>
                       <span>
                         {formatNumber((draftAnswer || activeIdea.draftAnswer || "").length)}
-                        /1,500
+                        /{formatNumber(1500)}
                       </span>
                     </div>
                     {formError && (
@@ -2223,25 +2212,25 @@ export default function Home() {
                       onClick={() => answerCurrent("development")}
                       disabled={busy}
                     >
-                      Save answer <ArrowRight size={18} />
+                      ثبت پاسخ <ArrowRight size={18} />
                     </button>
                     <button
                       className="text-button proposal-shortcut"
                       onClick={() => beginReview(activeIdea)}
                     >
-                      Build a proposal from current information <ChevronRight size={15} />
+                      ساخت پیشنهاد بر پایهٔ اطلاعات فعلی <ChevronRight size={15} />
                     </button>
                   </>
                 ) : (
                   <>
                     <p className="review-hint">
-                      You can return to any section and add more information whenever you learn something new.
+                      هر زمان اطلاعات تازه‌ای به دست آوردید، می‌توانید به هر بخشی برگردید و آن را کامل‌تر کنید.
                     </p>
                     <button
                       className="primary-button"
                       onClick={() => beginReview(activeIdea)}
                     >
-                      Review proposal <FileText size={18} />
+                      بازبینی پیشنهاد <FileText size={18} />
                     </button>
                   </>
                 )}
@@ -2249,14 +2238,14 @@ export default function Home() {
             </div>
             <aside className="journey-side">
               <div className="side-section-title">
-                <span>Idea in progress</span>
+                <span>ایدهٔ در حال پیشرفت</span>
                 <Lightbulb size={16} />
               </div>
               <p className="seed-quote">“<bdi dir="auto">{activeIdea.seed}</bdi>”</p>
               <div className="side-divider" />
               <div className="side-section-title">
-                <span>Idea development guide</span>
-                <span>{formatNumber(Math.min(devIndex, 10))}/10</span>
+                <span>راهنمای توسعهٔ ایده</span>
+                <span>{formatNumber(Math.min(devIndex, 10))}/{formatNumber(10)}</span>
               </div>
               <div className="step-list">
                 {developmentQuestions.map((item, index) => (
@@ -2278,8 +2267,8 @@ export default function Home() {
               <div className="token-mini">
                 <span className="token-glyph"><Sparkles size={16} aria-hidden="true" /></span>
                 <span>
-                  <b>{formatNumber(totalTokens)} tokens</b>
-                  <small>2 per thoughtful answer · 5 for completing each stage</small>
+                  <b>{formatNumber(totalTokens)} توکن</b>
+                  <small>۲ توکن برای هر پاسخ سنجیده · ۵ توکن برای تکمیل هر گام</small>
                 </span>
               </div>
               <div className="answer-history">
@@ -2289,9 +2278,9 @@ export default function Home() {
                     <button
                       className="text-button"
                       onClick={() => editAnswer(activeIdea, answer)}
-                      aria-label={`Edit your answer about ${displaySection(answer.section)}`}
+                      aria-label={`ویرایش پاسخ شما دربارهٔ ${displaySection(answer.section)}`}
                     >
-                      Edit
+                      ویرایش
                     </button>
                   </div>
                 ))}
@@ -2304,43 +2293,41 @@ export default function Home() {
       {screen === "review" && activeIdea && (
         <section className="review-view">
           <button className="back-link" onClick={() => setScreen("dashboard")}>
-            <ArrowLeft size={16} /> Save and exit
+            <ArrowLeft size={16} /> ذخیره و خروج
           </button>
           <div className="eyebrow">
             <span className="eyebrow-line" />
-            Final review
+            بازبینی نهایی
           </div>
           <h1>
-            Your idea, <em>clear and considered.</em>
+            ایدهٔ شما، <em>روشن و سنجیده</em>
           </h1>
           <p className="form-intro">
-            This draft is based on your answers. “Not explored yet” marks
-            questions that are still open. Edit any section before choosing
-            what to do next.
+            این پیش‌نویس بر پایهٔ پاسخ‌های شماست. عبارت «هنوز بررسی نشده است» بخش‌هایی را نشان می‌دهد که پرسش‌هایشان باز مانده‌اند. پیش از انتخاب گام بعدی، هر بخشی را ویرایش کنید.
           </p>
           <div className="review-origin">
             <span>
               <Users size={16} />
-              Based on information you provided
+              بر پایهٔ اطلاعاتی که شما وارد کرده‌اید
             </span>
             <p>
-              Starting idea: “<bdi dir="auto">{activeIdea.seed}</bdi>”
+              ایدهٔ اولیه: «<bdi dir="auto">{activeIdea.seed}</bdi>»
             </p>
           </div>
           <div className="proposal-grid">
             {[
-              ["title", "Proposal title"],
-              ["summary", "Short summary"],
-              ["problem", "Problem and evidence"],
-              ["beneficiaries", "People who benefit"],
-              ["solution", "Proposed solution"],
-              ["impact", "Expected social impact"],
-              ["evidence", "Evidence and assumptions"],
-              ["feasibility", "Feasibility and resources"],
-              ["pilot", "Pilot and next steps"],
-              ["measurement", "Measurement"],
-              ["risks", "Risks and mitigations"],
-              ["openQuestions", "Open questions"],
+              ["title", "عنوان پیشنهاد"],
+              ["summary", "خلاصهٔ کوتاه"],
+              ["problem", "مسئله و شواهد"],
+              ["beneficiaries", "افراد بهره‌مند"],
+              ["solution", "راهکار پیشنهادی"],
+              ["impact", "تأثیر اجتماعی مورد انتظار"],
+              ["evidence", "شواهد و فرض‌ها"],
+              ["feasibility", "امکان‌پذیری و منابع"],
+              ["pilot", "اجرای آزمایشی و گام‌های بعدی"],
+              ["measurement", "سنجش نتایج"],
+              ["risks", "خطرها و راه‌های کاهش آن‌ها"],
+              ["openQuestions", "پرسش‌های بی‌پاسخ"],
             ].map(([key, title]) => (
               <label className="proposal-field" key={key}>
                 {title}
@@ -2362,8 +2349,7 @@ export default function Home() {
           <div className="proposal-attribution">
             <Sparkles size={16} />
             <span>
-              Javaneh organized your answers. The information comes from what
-              you wrote; no statistics, partnerships, or outcomes were invented.
+              جوانه پاسخ‌های شما را مرتب کرده است. اطلاعات از نوشته‌های خودتان می‌آیند؛ هیچ آمار، همکاری یا نتیجه‌ای ساخته نشده است.
             </span>
           </div>
           {activeIdea.status === "awaiting-confirmation" &&
@@ -2372,14 +2358,11 @@ export default function Home() {
                 <Clock3 size={18} />
                 <div>
                   <b>
-                    Review deadline: {formatDate(activeIdea.confirmationDeadlineAt)}
+                    مهلت بازبینی: {formatDate(activeIdea.confirmationDeadlineAt)}
                   </b>
                   <span>
                     {formatNumber(remainingHours)}{" "}
-                    {remainingHours === 1 ? "hour" : "hours"} remaining. If you
-                    do not confirm or edit by then, the proposal will be marked
-                    as submitted in this browser the next time you open the app
-                    after the deadline.
+                    ساعت باقی مانده است. اگر تا آن زمان پیشنهاد را تأیید یا ویرایش نکنید، پس از پایان مهلت و در نخستین باری که برنامه را باز کنید، وضعیت آن در همین مرورگر «ارسال‌شده» می‌شود.
                   </span>
                 </div>
               </div>
@@ -2392,26 +2375,23 @@ export default function Home() {
                 setScreen("dashboard");
               }}
             >
-              Save and return <ArrowLeft size={16} />
+              ذخیره و بازگشت <ArrowLeft size={16} />
             </button>
             <button
               className="secondary-button"
               onClick={() => submitProposal("later")}
             >
-              Submit with a 72-hour review period <Clock3 size={16} />
+              ثبت با مهلت بازبینی ۷۲ ساعته <Clock3 size={16} />
             </button>
             <button
               className="primary-button"
               onClick={() => submitProposal("now")}
             >
-              Confirm and submit now <Send size={17} />
+              تأیید و ثبت نهایی <Send size={17} />
             </button>
           </div>
           <p className="local-limit-note">
-            This demo saves submissions only in this browser; nothing is sent
-            to event organizers. The 72-hour deadline is exact. There is no
-            background timer, so expiration is checked while the app is open or
-            the next time it loads.
+            این نسخه پیشنهاد را فقط در همین مرورگر نگه می‌دارد و چیزی برای برگزارکنندگان ارسال نمی‌کند. مهلت ۷۲ ساعته دقیق است؛ چون زمان‌سنجی در پس‌زمینه انجام نمی‌شود، پایان مهلت هنگام بازبودن برنامه یا در بارگذاری بعدی بررسی می‌شود.
           </p>
         </section>
       )}
@@ -2423,39 +2403,39 @@ export default function Home() {
           </div>
           <div className="eyebrow">
             <span className="eyebrow-line" />
-            Proposal submitted
+            پیشنهاد ثبت شد
           </div>
           <h1>
             {activeIdea.autoSubmitted
-              ? "Your review period has ended."
-              : <>Your proposal is <em>submitted.</em></>}
+              ? "مهلت بازبینی شما به پایان رسیده است."
+              : <>پیشنهاد شما <em>ثبت شده است</em></>}
           </h1>
           <p className="success-copy">
             {activeIdea.autoSubmitted
-              ? "After the deadline, your proposal status changed to submitted in this browser when you reopened the app."
-              : "Your proposal and its submission time are saved in this browser."}
+              ? "پس از پایان مهلت، با بازکردن دوبارهٔ برنامه وضعیت پیشنهاد در همین مرورگر به «ثبت‌شده» تغییر کرد."
+              : "پیشنهاد و زمان ثبت آن در همین مرورگر ذخیره شده‌اند."}
           </p>
           <div className="submitted-card">
             <div>
-              <span>Idea</span>
+              <span>ایده</span>
               <b><bdi dir="auto">{activeIdea.title}</bdi></b>
             </div>
             <div>
-              <span>Submitted</span>
+              <span>زمان ثبت</span>
               <b>
                 {activeIdea.submittedAt
                   ? formatDate(activeIdea.submittedAt)
-                  : "Saved in this browser"}
+                  : "ذخیره‌شده در این مرورگر"}
               </b>
             </div>
             <div>
-              <span>Tokens earned</span>
+              <span>توکن‌های دریافت‌شده</span>
               <b>
                 {formatNumber(activeIdea.tokens.reduce(
                   (sum, entry) => sum + entry.amount,
                   0,
                 ))}{" "}
-                tokens <small>· Demo-only score</small>
+                توکن <small>· امتیاز مشارکت و غیررسمی</small>
               </b>
             </div>
           </div>
@@ -2465,7 +2445,7 @@ export default function Home() {
               .filter(([key, value]) => key !== "title" && value.trim())
               .map(([key, value]) => (
                 <section key={key}>
-                  <h3>{proposalLabels[key] ?? key}</h3>
+                  <h3>{proposalLabels[key] ?? "بخش دیگر"}</h3>
                   <p><bdi dir="auto">{displayProposalText(value)}</bdi></p>
                 </section>
               ))}
@@ -2474,22 +2454,21 @@ export default function Home() {
             className="primary-button"
             onClick={() => setScreen("dashboard")}
           >
-            Back to my ideas <ArrowLeft size={17} />
+            بازگشت به ایده‌های من <ArrowLeft size={17} />
           </button>
           <p className="local-limit-note">
-            This proposal is saved only in this browser and is not sent to event organizers.
+            این پیشنهاد فقط در همین مرورگر ذخیره شده و برای برگزارکنندگان رویداد ارسال نشده است.
           </p>
         </section>
       )}
 
       <footer className="app-footer">
         <span>
-          <Flower2 size={15} /> Javaneh · Grow ideas for social innovation
+          <Flower2 size={15} /> جوانه · پرورش ایده برای نوآوری اجتماعی
         </span>
         <button onClick={() => setScreen("dashboard")}>
-          <BookOpenText size={14} /> My ideas <ArrowRight size={13} />
+          <BookOpenText size={14} /> ایده‌های من <ArrowRight size={13} />
         </button>
-        <span>Your information is saved only in this browser.</span>
       </footer>
     </main>
   );

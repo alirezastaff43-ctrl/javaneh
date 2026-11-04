@@ -29,11 +29,11 @@ function requestBody(overrides: Record<string, unknown> = {}) {
 
 function validDecision() {
   return {
-    mentorMessage: "Thanks for sharing that.",
+    mentorMessage: "ممنون که این را با من در میان گذاشتی.",
     stageComplete: false,
     coveredSections: [],
     nextSection: INTAKE_AXES[2].section,
-    nextQuestion: "What might still be unclear about why this happens?",
+    nextQuestion: "چه چیزهایی دربارهٔ علت این مسئله هنوز برایت روشن نیست؟",
   };
 }
 
@@ -96,9 +96,9 @@ describe("adaptive interview route", () => {
     const userContext = JSON.parse(providerRequest.messages[1].content);
     expect(userContext.answer).toBe(requestBody().answer);
     expect(userContext.history).toEqual(requestBody().history);
-    expect(userContext.responseLanguage).toBe("English");
+    expect(userContext.responseLanguage).toBe("Persian");
     expect(userContext.eligibleCoveredSections).toEqual(requestBody().remainingSections);
-    expect(userContext.sectionFocusTerms["What is known"]).toContain("know");
+    expect(userContext.sectionFocusTerms["What is known"]).toContain("علت");
     expect(userContext).not.toHaveProperty("suggestedNextQuestion");
   });
 
@@ -107,12 +107,12 @@ describe("adaptive interview route", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       providerResponse(
         JSON.stringify({
-          mentorMessage: "Thanks.",
+          mentorMessage: "ممنون از توضیحت.",
           stageComplete: false,
           coveredSections: [],
           nextSection: axes[3].section,
           nextQuestion:
-            "What experience would a participant have from first contact through the change you hope to create?",
+            "افراد از نخستین برخورد تا ایجاد تغییر، چه تجربه‌ای خواهند داشت؟",
         }),
       ),
     );
@@ -276,7 +276,7 @@ describe("adaptive interview route", () => {
     );
   });
 
-  it("returns an English demo question when no key is configured", async () => {
+  it("returns a Persian fallback question when no key is configured", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "");
     vi.stubEnv("AI_API_KEY", "");
 
@@ -295,7 +295,8 @@ describe("adaptive interview route", () => {
 
     expect(response.status).toBe(200);
     expect(result.mode).toBe("demo");
-    expect(result.nextQuestion).toBe(INTAKE_AXES[1].question);
+    expect(result.nextQuestion).toContain("چراغ مسیر پیاده‌رو شب‌ها خاموش می‌ماند");
+    expect(result.nextQuestion).toContain(INTAKE_AXES[1].question);
     expect(result.nextSection).toBe(INTAKE_AXES[1].section);
     expect(result.stageComplete).toBe(false);
   });
@@ -373,8 +374,8 @@ describe("adaptive interview route", () => {
       }),
     ],
     [
-      "non-English question",
-      JSON.stringify({ ...validDecision(), nextQuestion: "Что вы заметили?" }),
+      "non-Persian question",
+      JSON.stringify({ ...validDecision(), nextQuestion: "What did you notice?" }),
     ],
     [
       "empty question",
@@ -417,7 +418,7 @@ describe("adaptive interview route", () => {
     const result = await response.json();
 
     expect(response.status).toBe(503);
-    expect(result.error).toContain("Your answer is saved");
+    expect(result.error).toContain("پاسخ شما ذخیره شده");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 

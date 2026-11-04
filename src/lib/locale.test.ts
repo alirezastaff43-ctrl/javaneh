@@ -6,7 +6,7 @@ import {
   normalizeDigits,
 } from "./locale";
 
-describe("English localization helpers", () => {
+describe("Persian localization helpers", () => {
   it("normalizes Persian, Arabic, and Western digits for validation", () => {
     expect(normalizeDigits("۰۱۲۳۴۵۶۷۸۹")).toBe("0123456789");
     expect(normalizeDigits("٠١٢٣٤٥٦٧٨٩")).toBe("0123456789");
@@ -17,9 +17,9 @@ describe("English localization helpers", () => {
     expect(normalizeDigits("۱۲۳۴-٥٦")).toBe("1234-56");
   });
 
-  it("formats interface numbers with Western digits", () => {
-    expect(formatNumber(1200)).toBe("1,200");
-    expect(formatNumber(72)).toBe("72");
+  it("formats interface numbers with Persian digits", () => {
+    expect(formatNumber(1200)).toBe("۱٬۲۰۰");
+    expect(formatNumber(72)).toBe("۷۲");
   });
 
   it("accepts English text and rejects non-Latin scripts in mentor copy", () => {
@@ -28,11 +28,11 @@ describe("English localization helpers", () => {
     expect(isEnglishText("سلام")).toBe(false);
   });
 
-  it("formats dates in English with Western digits", () => {
+  it("formats dates in Persian with Persian digits", () => {
     const result = formatDate("2026-03-21T12:30:00.000Z");
-    expect(result).toMatch(/Mar \d{1,2}, 2026/);
-    expect(result).toMatch(/[0-9]/);
-    expect(result).not.toMatch(/[۰-۹٠-٩]/);
+    expect(result).toMatch(/[۰-۹]/);
+    expect(result).toContain("۱۴۰۵");
+    expect(result).not.toMatch(/[A-Za-z]/);
   });
 
   it("rejects invalid date values instead of displaying a misleading date", () => {

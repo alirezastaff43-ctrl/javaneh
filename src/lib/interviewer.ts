@@ -1,100 +1,100 @@
-import { isEnglishText } from "./locale";
+import { isPersianText } from "./locale";
 
 export type InterviewStage = "initial" | "development";
 
 export const INTAKE_AXES = [
   {
     section: "The problem",
-    label: "The problem",
-    question: "What specific problem have you noticed, and where or when does it happen?",
-    focusTerms: ["problem", "happen"],
+    label: "مسئله",
+    question: "چه مسئلهٔ مشخصی توجهت را جلب کرده و این مسئله کجا یا چه زمانی رخ می‌دهد؟",
+    focusTerms: ["مسئله", "کجا", "زمانی"],
   },
   {
     section: "People affected",
-    label: "People affected",
-    question: "Who is affected by this problem, and how does it affect their daily lives?",
-    focusTerms: ["who", "affected", "daily lives"],
+    label: "افراد درگیر",
+    question: "چه کسانی از این مسئله تأثیر می‌گیرند و این موضوع چه اثری بر زندگی روزمره‌شان دارد؟",
+    focusTerms: ["چه کسانی", "تأثیر", "روزمره"],
   },
   {
     section: "What is known",
-    label: "What is known",
-    question: "What do you know about why this happens, what others have tried, and what remains unclear?",
-    focusTerms: ["know", "why", "unclear"],
+    label: "دانسته‌ها",
+    question: "دربارهٔ علت این مسئله، کارهایی که دیگران امتحان کرده‌اند و چیزهایی که هنوز روشن نیست چه می‌دانی؟",
+    focusTerms: ["علت", "امتحان", "روشن نیست"],
   },
   {
     section: "Your idea",
-    label: "Your idea",
-    question: "What approach would you like to try, and how might it help?",
-    focusTerms: ["approach", "try", "help"],
+    label: "ایدهٔ تو",
+    question: "دوست داری چه راهکاری را امتحان کنی و فکر می‌کنی چطور می‌تواند کمک‌کننده باشد؟",
+    focusTerms: ["راهکار", "امتحان", "کمک"],
   },
   {
     section: "Your connection",
-    label: "Your connection",
-    question: "What has made you personally interested in or connected to this problem?",
-    focusTerms: ["personally", "interested", "connected"],
+    label: "ارتباط تو با مسئله",
+    question: "چه چیزی باعث شده شخصاً به این مسئله علاقه‌مند شوی یا با آن ارتباط داشته باشی؟",
+    focusTerms: ["شخصاً", "علاقه‌مند", "ارتباط"],
   },
 ] as const;
 
 export const DEVELOPMENT_AXES = [
   {
     section: "Evidence",
-    label: "Evidence",
-    question: "Can you share a specific example, say how often it happens, and note what still needs to be checked?",
-    focusTerms: ["example", "often", "checked"],
+    label: "شواهد",
+    question: "می‌توانی نمونه‌ای مشخص بگویی، توضیح بدهی این اتفاق هر چند وقت یک‌بار رخ می‌دهد و بگویی چه چیزی هنوز باید بررسی شود؟",
+    focusTerms: ["نمونه", "چند وقت", "بررسی"],
   },
   {
     section: "Stakeholders",
-    label: "Stakeholders",
-    question: "Who should help shape this idea, and could anyone be unintentionally left out or harmed?",
-    focusTerms: ["who", "help", "left out", "harmed"],
+    label: "افراد و گروه‌های مرتبط",
+    question: "چه کسانی بهتر است در شکل‌دادن به این ایده مشارکت کنند و ممکن است ناخواسته کسی نادیده گرفته شود یا آسیب ببیند؟",
+    focusTerms: ["چه کسانی", "مشارکت", "آسیب"],
   },
   {
     section: "Root causes",
-    label: "Root causes",
-    question: "Why do you think this problem continues, and what are people doing about it now?",
-    focusTerms: ["why", "problem", "continues"],
+    label: "ریشه‌های مسئله",
+    question: "به نظرت چرا این مسئله همچنان ادامه دارد و مردم اکنون برای روبه‌روشدن با آن چه می‌کنند؟",
+    focusTerms: ["چرا", "مسئله", "ادامه"],
   },
   {
     section: "Solution",
-    label: "Solution",
-    question: "From first contact to the change you hope to make, what experience would someone have?",
-    focusTerms: ["experience", "change"],
+    label: "راهکار",
+    question: "از نخستین برخورد تا تغییری که امیدوار به ایجاد آن هستی، افراد چه تجربه‌ای خواهند داشت؟",
+    focusTerms: ["برخورد", "تغییر", "تجربه"],
   },
   {
     section: "Feasibility",
-    label: "Feasibility",
-    question: "What skills, permissions, partners, or resources might you need, and what limits should you consider?",
-    focusTerms: ["resources", "limits", "skills"],
+    label: "امکان‌پذیری",
+    question: "به چه مهارت‌ها، مجوزها، همراهان یا منابعی نیاز داری و چه محدودیت‌هایی را باید در نظر بگیری؟",
+    focusTerms: ["مهارت", "منابع", "محدودیت"],
   },
   {
     section: "Pilot",
-    label: "Pilot",
-    question: "What is the smallest useful test you could run, with whom and where, to learn whether this approach helps?",
-    focusTerms: ["test", "whom", "where", "learn"],
+    label: "اجرای آزمایشی",
+    question: "کوچک‌ترین آزمون مفیدی که می‌توانی اجرا کنی چیست، با چه کسانی و کجا، تا بفهمی این راهکار مؤثر است یا نه؟",
+    focusTerms: ["آزمون", "چه کسانی", "کجا", "مؤثر"],
   },
   {
     section: "Outcomes",
-    label: "Outcomes",
-    question: "What realistic change could you notice soon, and how might you measure it?",
-    focusTerms: ["change", "measure"],
+    label: "نتایج",
+    question: "چه تغییر واقع‌بینانه‌ای را می‌توانی به‌زودی ببینی و چطور می‌توانی آن را اندازه‌گیری کنی؟",
+    focusTerms: ["تغییر", "اندازه‌گیری"],
   },
   {
     section: "Inclusion and risk",
-    label: "Inclusion and risk",
-    question: "What could go wrong or make participation difficult, and what practical step could reduce that risk?",
-    focusTerms: ["risk", "participation", "difficult"],
+    label: "مشارکت و خطرها",
+    question: "چه چیزی ممکن است به مشکل بخورد یا مشارکت را دشوار کند و چه اقدام عملی می‌تواند این خطر را کاهش دهد؟",
+    focusTerms: ["خطر", "مشارکت", "دشوار", "کاهش"],
   },
   {
     section: "Delivery",
-    label: "Delivery",
-    question: "What are the first two steps, who could take responsibility, and what would help keep the work going?",
-    focusTerms: ["steps", "responsibility", "work"],
+    label: "اجرا",
+    question: "دو گام نخست چیست، چه کسی می‌تواند مسئولیت آن‌ها را بپذیرد و چه چیزی به ادامهٔ کار کمک می‌کند؟",
+    focusTerms: ["گام", "مسئولیت", "ادامه"],
   },
   {
     section: "Next actions",
-    label: "Next actions",
-    question: "What is the most important unanswered question, and what specific next step could help you explore it?",
-    focusTerms: ["unanswered question", "next step", "explore"],
+    label: "گام‌های بعدی",
+    question: "مهم‌ترین پرسشی که هنوز بی‌پاسخ مانده چیست و چه گام مشخصی کمک می‌کند آن را بررسی کنی؟",
+    focusTerms: ["پرسش", "گام", "بررسی"],
   },
 ] as const;
 
@@ -144,7 +144,7 @@ export function findAxis(
 }
 
 function normalizedQuestion(question: string) {
-  return question.toLocaleLowerCase("en").replace(/[\s?.,;:!]+/g, "");
+  return question.toLocaleLowerCase("fa").replace(/[\s؟?.,؛;:!]+/g, "");
 }
 
 export function isValidInterviewQuestion(
@@ -156,10 +156,10 @@ export function isValidInterviewQuestion(
   if (
     !trimmed ||
     trimmed.length > 600 ||
-    !isEnglishText(trimmed) ||
-    (trimmed.match(/\?/g) ?? []).length !== 1 ||
+    !isPersianText(trimmed) ||
+    (trimmed.match(/[؟?]/g) ?? []).length !== 1 ||
     !axis.focusTerms.some((term) =>
-      trimmed.toLocaleLowerCase("en").includes(term),
+      trimmed.toLocaleLowerCase("fa").includes(term),
     )
   )
     return false;
@@ -179,7 +179,7 @@ export function validateInterviewDecision(
     typeof result.mentorMessage !== "string" ||
     result.mentorMessage.trim().length === 0 ||
     result.mentorMessage.length > 120 ||
-    !isEnglishText(result.mentorMessage) ||
+    !isPersianText(result.mentorMessage) ||
     typeof result.stageComplete !== "boolean" ||
     !Array.isArray(result.coveredSections) ||
     result.coveredSections.some((section) => typeof section !== "string") ||
@@ -223,7 +223,7 @@ export function createDemoDecision(
   const nextSection = request.remainingSections[0];
   if (!nextSection) {
     return {
-      mentorMessage: "Thank you.",
+      mentorMessage: "ممنون از همراهی‌ات.",
       stageComplete: true,
       coveredSections: [],
       nextSection: null,
@@ -233,20 +233,17 @@ export function createDemoDecision(
 
   const nextAxis = findAxis(nextSection, request.stage);
   if (!nextAxis) throw new Error("Unknown interview section");
-  const isUnsure = /\b(?:not sure|don't know|do not know|no idea)\b/i.test(
+  const isUnsure = /(?:مطمئن نیستم|نمی‌دانم|نمی دونم|نظری ندارم)/u.test(
     request.answer,
   );
-  const anchor = request.answer
-    .trim()
-    .replace(/\?/g, "")
-    .replace(/\s+/g, " ")
-    .slice(0, 60);
+    const answerQuote = request.answer.trim();
+    const canQuoteAnswer = answerQuote.length <= 60 && !/[؟?]/u.test(answerQuote);
   const nextQuestion =
-    isUnsure || !isEnglishText(anchor)
+      isUnsure || !canQuoteAnswer
       ? nextAxis.question
-      : `You mentioned “${anchor}.” ${nextAxis.question}`;
+        : `گفتی «\u2068${answerQuote}\u2069»؛ ${nextAxis.question}`;
   return {
-    mentorMessage: "Thanks for sharing that.",
+    mentorMessage: "ممنون که این را با من در میان گذاشتی.",
     stageComplete: false,
     coveredSections: [],
     nextSection,
