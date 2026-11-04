@@ -22,7 +22,15 @@ Open the URL printed by Next.js (normally `http://localhost:3000`). Run `npm tes
 
 ## Optional AI provider
 
-The provider adapter is server-side in `src/app/api/mentor/route.ts` and uses an OpenAI-compatible chat-completions endpoint. To use Google's Gemini OpenAI compatibility endpoint, configure server-only variables:
+The provider adapter is server-side in `src/app/api/mentor/route.ts` and uses an OpenAI-compatible chat-completions endpoint. To use AvalAI, configure these server-only variables:
+
+```env
+AVALAI_API_KEY=your-server-side-key
+AI_MODEL=gpt-5.6-luna
+AI_BASE_URL=https://api.avalai.ir/v1
+```
+
+The route calls `.../chat/completions` and sends AvalAI's `AVALAI_API_KEY` only to `api.avalai.ir`. `AI_MODEL` can be changed to any model available to your AvalAI account. For Google's Gemini OpenAI compatibility endpoint (not the native `generateContent` API), use `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) with:
 
 ```env
 GEMINI_API_KEY=your-server-side-key
@@ -30,7 +38,7 @@ AI_MODEL=gemini-2.5-flash
 AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 ```
 
-The route calls `.../chat/completions`; this is Gemini's OpenAI-compatible API, not the native `generateContent` API. `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) is preferred for Google's endpoint. The legacy `AI_API_KEY` is also accepted. For OpenRouter, use:
+The legacy `AI_API_KEY` is also accepted for Gemini and OpenRouter. For OpenRouter, use:
 
 ```env
 OPENROUTER_API_KEY=your-server-side-key
@@ -40,7 +48,7 @@ OPENROUTER_SITE_URL=https://your-public-site.example
 OPENROUTER_APP_NAME=Javaneh
 ```
 
-`AI_MODEL` and `AI_BASE_URL` remain configurable. When neither is set, the route defaults to OpenRouter and its documented model. The selected key follows the endpoint: Google keys are not silently replaced by an OpenRouter key. `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` are optional attribution metadata sent only to OpenRouter. Never prefix an API key with `NEXT_PUBLIC_` or commit it.
+`AI_MODEL` and `AI_BASE_URL` remain configurable. When neither is set, the route defaults to OpenRouter and its documented model. Provider-specific keys are selected by endpoint; for example, an OpenRouter key is never sent to AvalAI or Google. `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` are optional attribution metadata sent only to OpenRouter. Never prefix an API key with `NEXT_PUBLIC_` or commit it.
 
 The route bounds input and provider response sizes, validates the request and model output, and redacts personal data from participant-authored text before forwarding it. It makes at most three attempts for transient network failures, HTTP 500/502/503/504, and HTTP 429; retries use jittered backoff and honor `Retry-After` when supplied. Each attempt has a 17-second timeout within a 55-second total request budget. Permanent HTTP 400/401/403 failures are not retried. Provider diagnostics are bounded and redact credentials and personal identifiers; provider details and credentials are not returned to the browser. The UI keeps the saved answer and provides actionable failure messages. Demo mode is used when no provider key is configured.
 

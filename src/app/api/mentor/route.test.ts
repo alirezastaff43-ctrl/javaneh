@@ -55,6 +55,7 @@ async function post(value: unknown) {
 
 describe("adaptive interview route", () => {
   beforeEach(() => {
+    vi.stubEnv("AVALAI_API_KEY", "");
     vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
     vi.stubEnv("AI_API_KEY", "legacy-test-key");
     vi.stubEnv("GEMINI_API_KEY", "");
@@ -95,6 +96,9 @@ describe("adaptive interview route", () => {
     const userContext = JSON.parse(providerRequest.messages[1].content);
     expect(userContext.answer).toBe(requestBody().answer);
     expect(userContext.history).toEqual(requestBody().history);
+    expect(userContext.responseLanguage).toBe("English");
+    expect(userContext.eligibleCoveredSections).toEqual(requestBody().remainingSections);
+    expect(userContext.sectionFocusTerms["What is known"]).toContain("know");
     expect(userContext).not.toHaveProperty("suggestedNextQuestion");
   });
 
@@ -198,6 +202,43 @@ describe("adaptive interview route", () => {
     );
     expect(options.headers.Authorization).toBe("Bearer test-gemini-key");
     expect(providerRequest.model).toBe("gemini-3.8-flash");
+  });
+
+  it("uses the AvalAI endpoint and its provider-specific key", async () => {
+    vi.stubEnv("AI_BASE_URL", "https://api.avalai.ir/v1");
+    vi.stubEnv("AVALAI_API_KEY", "test-avalai-key");
+    vi.stubEnv("OPENROUTER_API_KEY", "wrong-provider-key");
+    const fetchMock = vi.fn().mockResolvedValue(
+      providerResponse(JSON.stringify(validDecision())),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await post(requestBody());
+    const [url, options] = fetchMock.mock.calls[0];
+    const providerRequest = JSON.parse(options.body);
+
+    expect(response.status).toBe(200);
+    expect(url).toBe("https://api.avalai.ir/v1/chat/completions");
+    expect(options.headers.Authorization).toBe("Bearer test-avalai-key");
+    expect(providerRequest.model).toBe("gpt-5.6-luna");
+    expect(providerRequest.temperature).toBe(1);
+  });
+
+  it("does not send another provider's key to AvalAI", async () => {
+    vi.stubEnv("AI_BASE_URL", "https://api.avalai.ir/v1");
+    vi.stubEnv("OPENROUTER_API_KEY", "wrong-provider-key");
+    vi.stubEnv("AI_API_KEY", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await post(requestBody());
+    const result = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(result.code).toBe("provider_configuration");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(error.mock.calls)).not.toContain("wrong-provider-key");
   });
 
   it("does not send an OpenRouter key to a Gemini endpoint", async () => {
