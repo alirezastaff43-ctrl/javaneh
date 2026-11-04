@@ -1,6 +1,7 @@
 "use client";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import StructuredRegistrationForm from "./structured-registration-form";
 import {
   ArrowLeft,
   ArrowRight,
@@ -32,6 +33,7 @@ import {
   Sprout,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
 import {
   formatDate,
@@ -58,6 +60,12 @@ import {
   type Stage,
 } from "@/lib/domain";
 import {
+  STRUCTURED_STORAGE_KEY,
+  createStructuredDraft,
+  normalizeRegistrationStore,
+  type StructuredRegistration,
+} from "@/lib/structured-registration";
+import {
   axesForStage,
   developmentOpeningQuestion,
   findAxis,
@@ -68,9 +76,15 @@ import {
   type InterviewRequest,
 } from "@/lib/interviewer";
 import { isValidOpeningQuestion } from "@/lib/opening-question";
+import {
+  moderationMessage,
+  type ModerationCategory,
+  type ModerationInput,
+} from "@/lib/moderation";
 
 type Screen =
   | "home"
+  | "structured"
   | "details"
   | "verify"
   | "intake"
@@ -79,6 +93,10 @@ type Screen =
   | "develop"
   | "review"
   | "submitted";
+type MentorChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
 const labels = {
   statuses: {
     initial: "تازه‌شروع‌شده",
@@ -87,7 +105,7 @@ const labels = {
     submitted: "ارسال‌شده",
   },
   localNotice:
-    "ایده‌ها و پاسخ‌های شما فقط در فضای ذخیره‌سازی همین مرورگر نگهداری می‌شوند و بین دستگاه‌ها همگام‌سازی نمی‌شوند. پاک‌کردن داده‌های مرورگر ممکن است آن‌ها را برای همیشه حذف کند.",
+    "ایده‌ها، پاسخ‌ها و ثبت‌های ساختاریافته فقط در فضای ذخیره‌سازی همین مرورگر نگهداری می‌شوند و بین دستگاه‌ها همگام‌سازی نمی‌شوند. پاک‌کردن داده‌های مرورگر ممکن است آن‌ها را برای همیشه حذف کند.",
 };
 
 function mentorFailureMessage(payload: unknown): string {
@@ -113,6 +131,29 @@ function mentorFailureMessage(payload: unknown): string {
       return payload.error;
   }
   return "پرسش بعدی آماده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.";
+}
+
+async function moderateContent(input: ModerationInput): Promise<ModerationCategory> {
+  const response = await fetch("/api/mentor/moderate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error("moderation_response_unreadable");
+  }
+  if (
+    !response.ok ||
+    !payload ||
+    typeof payload !== "object" ||
+    !("category" in payload) ||
+    !["relevant", "off_topic", "restricted"].includes(payload.category as string)
+  )
+    throw new Error("moderation_unavailable");
+  return payload.category as ModerationCategory;
 }
 
 const sectionLabels: Record<string, string> = {
@@ -339,6 +380,9 @@ function getProgress(idea: Idea) {
 export default function Home() {
   const [state, setState] = useState<AppState>(emptyState());
   const stateRef = useRef(state);
+  const [registrations, setRegistrations] = useState<StructuredRegistration[]>([]);
+  const registrationsRef = useRef(registrations);
+  const [activeRegistration, setActiveRegistration] = useState<StructuredRegistration | null>(null);
   function commitState(
     updater: AppState | ((current: AppState) => AppState),
   ) {
@@ -346,6 +390,71 @@ export default function Home() {
       typeof updater === "function" ? updater(stateRef.current) : updater;
     stateRef.current = nextState;
     setState(nextState);
+  }
+
+  function commitRegistrations(nextRecords: StructuredRegistration[]) {
+    registrationsRef.current = nextRecords;
+    setRegistrations(nextRecords);
+  }
+
+  function persistRegistration(updated: StructuredRegistration) {
+    const nextRecords = registrationsRef.current.some((item) => item.id === updated.id)
+      ? registrationsRef.current.map((item) => item.id === updated.id ? updated : item)
+      : [...registrationsRef.current, updated];
+    commitRegistrations(nextRecords);
+    setActiveRegistration(updated);
+    try {
+      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
+      setStorageError("");
+    } catch {
+      setStorageError(
+        "این پیش‌نویس در حافظهٔ فعلی صفحه نگه داشته شد، اما در مرورگر ذخیره نشد و ممکن است با بستن صفحه از دست برود.",
+      );
+    }
+  }
+
+  function submitRegistration(updated: StructuredRegistration): boolean {
+    const nextRecords = registrationsRef.current.map((item) => item.id === updated.id ? updated : item);
+    try {
+      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
+    } catch {
+      setStorageError(
+        "ثبت نهایی ذخیره نشد. پاسخ‌ها به‌صورت پیش‌نویس در همین صفحه باقی‌اند؛ فضای ذخیره‌سازی مرورگر را بررسی کنید.",
+      );
+      return false;
+    }
+    commitRegistrations(nextRecords);
+    setActiveRegistration(updated);
+    setStorageError("");
+    return true;
+  }
+
+  function startStructuredRegistration() {
+    const existingDraft = registrationsRef.current.find((item) => item.status === "draft");
+    if (existingDraft) {
+      setActiveRegistration(existingDraft);
+      setFormError("");
+      setScreen("structured");
+      return;
+    }
+    if (!canCreateIdea(stateRef.current, registrationsRef.current.length)) {
+      setFormError("به سقف سه ثبت در این مرورگر رسیده‌اید. ثبت‌های ذخیره‌شده همچنان در دسترس‌اند.");
+      return;
+    }
+    const draft = createStructuredDraft();
+    const nextRecords = [...registrationsRef.current, draft];
+    commitRegistrations(nextRecords);
+    setActiveRegistration(draft);
+    setFormError("");
+    try {
+      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
+      setStorageError("");
+    } catch {
+      setStorageError(
+        "پیش‌نویس فقط تا وقتی این صفحه باز است نگه داشته می‌شود؛ ذخیره‌سازی مرورگر در دسترس نیست.",
+      );
+    }
+    setScreen("structured");
   }
   const [ready, setReady] = useState(false);
   const [screen, setScreen] = useState<Screen>("home");
@@ -367,7 +476,24 @@ export default function Home() {
   const [mentorMode, setMentorMode] = useState<"demo" | "provider" | null>(
     null,
   );
+  const [mentorChatMessages, setMentorChatMessages] = useState<
+    MentorChatMessage[]
+  >([
+    {
+      role: "assistant",
+      content:
+        "سلام! من راهنمای همراهتم 🌱 هر پرسشی دربارهٔ ثبت ایده، مرحله‌های پرورش آن یا ایده‌هایی که ثبت کرده‌ای داری، راحت بپرس. با هم قدم‌به‌قدم جلو می‌رویم.",
+    },
+  ]);
+  const [mentorChatDraft, setMentorChatDraft] = useState("");
+  const [mentorChatBusy, setMentorChatBusy] = useState(false);
+  const [mentorChatError, setMentorChatError] = useState("");
+  const [mentorChatOpen, setMentorChatOpen] = useState(false);
+  const mentorChatBusyRef = useRef(false);
+  const mentorChatEndRef = useRef<HTMLDivElement>(null);
+  const mentorChatInputRef = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState(false);
+  const [moderationBusy, setModerationBusy] = useState(false);
   const [openingBusy, setOpeningBusy] = useState(false);
   const [openingAttempt, setOpeningAttempt] = useState(0);
   const openingRequestRef = useRef("");
@@ -389,6 +515,17 @@ export default function Home() {
       commitState(emptyState());
       setStorageError(
         "فضای ذخیره‌سازی مرورگر در دسترس نیست یا داده‌های ذخیره‌شده خوانده نشدند. ممکن است تغییرات این نشست پس از بارگذاری دوباره از دست بروند.",
+      );
+    }
+    try {
+      const savedRegistrations = localStorage.getItem(STRUCTURED_STORAGE_KEY);
+      const parsedRegistrations = savedRegistrations
+        ? normalizeRegistrationStore(JSON.parse(savedRegistrations))
+        : [];
+      commitRegistrations(parsedRegistrations);
+    } catch {
+      setStorageError(
+        "پیش‌نویس‌های ثبت ایده خوانده نشدند. ممکن است ذخیره‌سازی مرورگر در دسترس نباشد.",
       );
     }
     setReady(true);
@@ -436,6 +573,25 @@ export default function Home() {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    mentorChatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [mentorChatMessages, mentorChatBusy]);
+
+  useEffect(() => {
+    if (!mentorChatOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    mentorChatInputRef.current?.focus();
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setMentorChatOpen(false);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mentorChatOpen]);
 
   useEffect(() => {
     const deadline = state.ideas
@@ -549,31 +705,47 @@ export default function Home() {
     setFormError("");
   }
 
-  function startIdea() {
+  async function startIdea() {
     if (!seed.trim()) {
       setFormError("برای ادامه، چند کلمه دربارهٔ مسئله یا ایده‌تان بنویسید.");
       return;
     }
-    if (!canCreateIdea(state)) {
+    if (!canCreateIdea(state, registrationsRef.current.length)) {
       setFormError(
         "به سقف سه ایده رسیده‌اید. ایده‌های ذخیره‌شدهٔ شما همچنان در دسترس‌اند.",
       );
       return;
     }
     setFormError("");
-    if (state.profile?.verified) {
-      const idea = newIdea(seed);
-      commitState((current) => ({ ...current, ideas: [...current.ideas, idea] }));
-      setActiveId(idea.id);
-      setDraftAnswer("");
-      setReviewDraft({});
-      setMentorMode(null);
-      setMentorMessage(
-        "ایده‌تان را با همان واژه‌های خودتان و با پرسش‌هایی کاربردی، قدم‌به‌قدم پرورش می‌دهیم.",
-      );
-      setScreen("intake");
-    } else {
-      setScreen("details");
+    setModerationBusy(true);
+    try {
+      const category = await moderateContent({
+        kind: "seed",
+        seed: seed.trim(),
+        text: seed.trim(),
+      });
+      if (category !== "relevant") {
+        setFormError(moderationMessage(category));
+        return;
+      }
+      if (state.profile?.verified) {
+        const idea = newIdea(seed.trim());
+        commitState((current) => ({ ...current, ideas: [...current.ideas, idea] }));
+        setActiveId(idea.id);
+        setDraftAnswer("");
+        setReviewDraft({});
+        setMentorMode(null);
+        setMentorMessage(
+          "ایده‌تان را با همان واژه‌های خودتان و با پرسش‌هایی کاربردی، قدم‌به‌قدم پرورش می‌دهیم.",
+        );
+        setScreen("intake");
+      } else {
+        setScreen("details");
+      }
+    } catch {
+      setFormError("بررسی ایده موقتاً در دسترس نیست؛ متن شما ذخیره نشده است. دوباره تلاش کنید.");
+    } finally {
+      setModerationBusy(false);
     }
   }
 
@@ -670,6 +842,51 @@ export default function Home() {
         const currentAxis = axes[index];
         if (!currentAxis) {
           setFormError("این مرحله کامل شده است.");
+          return;
+        }
+        let moderationCategory: ModerationCategory;
+        try {
+          moderationCategory = await moderateContent({
+            kind: "answer",
+            seed: activeIdea.seed,
+            question: questionData.question,
+            text: answerText,
+          });
+        } catch {
+          setFormError("بررسی پاسخ موقتاً در دسترس نیست؛ پاسخ شما ثبت نشد. دوباره تلاش کنید.");
+          return;
+        }
+        if (moderationCategory !== "relevant") {
+          const invalidResponseCount =
+            (activeIdea.invalidResponseCount ?? 0) + 1;
+          if (invalidResponseCount >= 3) {
+            const nextState = removeIdea(stateRef.current, activeIdea.id);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+            } catch {
+              setStorageError(
+                "ذخیره‌سازی مرورگر در دسترس نیست؛ ایده حذف نشد. پس از برقراری ذخیره‌سازی دوباره تلاش کنید.",
+              );
+              setFormError("سه پاسخ نامرتبط ثبت شد، اما حذف ایده در مرورگر ذخیره نشد.");
+              return;
+            }
+            commitState(nextState);
+            setActiveId("");
+            setDraftAnswer("");
+            setReviewDraft({});
+            setScreen("dashboard");
+            setFormError("");
+            setTokenNotice("پس از سه پاسخ نامرتبط یا خارج از محدودیت‌ها، ایده از این مرورگر حذف شد.");
+            return;
+          }
+          const savedIdea = saveIdeaImmediately({
+            ...activeIdea,
+            invalidResponseCount,
+          });
+          if (!savedIdea) return;
+          setFormError(
+            `${moderationMessage(moderationCategory)} فرصت اصلاح: ${3 - invalidResponseCount} بار از ۳ بار باقی مانده است. پس از سه پاسخ نامرتبط، ایده حذف می‌شود.`,
+          );
           return;
         }
         const previous = activeIdea.answers.find(
@@ -1085,6 +1302,96 @@ export default function Home() {
     else beginReview(idea);
   }
 
+  async function sendMentorChatMessage(message = mentorChatDraft) {
+    const content = message.trim();
+    if (!content || mentorChatBusyRef.current) return;
+    mentorChatBusyRef.current = true;
+    setMentorChatBusy(true);
+    setMentorChatError("");
+    const registeredIdeas = [
+      ...state.ideas.map((idea) => ({
+        title: idea.title,
+        seed: idea.seed.slice(0, 800),
+        status: labels.statuses[idea.status],
+        answers: idea.answers.slice(-5).map(({ question, answer }) => ({
+          question: question.slice(0, 300),
+          answer: answer.slice(0, 500),
+        })),
+        proposal: Object.entries(idea.proposal)
+          .filter(([, value]) => value.trim())
+          .slice(0, 4)
+          .map(([section, text]) => ({ section, text: text.slice(0, 500) })),
+      })),
+      ...registrations.map(({ status, data }) => ({
+        title: data.title || "ایدهٔ ثبت‌شده",
+        seed: [data.problem, data.better].filter(Boolean).join("\n").slice(0, 800),
+        status: status === "submitted" ? "ثبت نهایی‌شده" : "پیش‌نویس",
+        answers: [
+          { question: "چه اقدامی برای بهترشدن انجام می‌شود؟", answer: data.action },
+          { question: "چه نتایجی انتظار می‌رود؟", answer: data.outcomes.join("، ") },
+          { question: "چه کسانی از این ایده بهره‌مند می‌شوند؟", answer: data.groups.join("، ") },
+          { question: "این ایده در چه حوزه‌ای است؟", answer: data.axis },
+        ]
+          .filter((answer) => answer.answer.trim())
+          .slice(-5)
+          .map(({ question, answer }) => ({
+            question,
+            answer: answer.slice(0, 500),
+          })),
+        proposal: [],
+      })),
+    ].slice(0, 3);
+    try {
+      const response = await fetch("/api/mentor/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            ...mentorChatMessages.slice(1).slice(-11),
+            { role: "user", content },
+          ],
+          ideas: registeredIdeas,
+        }),
+      });
+      const payload: unknown = await response.json();
+      const reply =
+        payload &&
+        typeof payload === "object" &&
+        "reply" in payload &&
+        typeof payload.reply === "string"
+          ? payload.reply
+          : null;
+      if (
+        !response.ok ||
+        reply === null
+      ) {
+        const error =
+          payload &&
+          typeof payload === "object" &&
+          "error" in payload &&
+          typeof payload.error === "string"
+            ? payload.error
+            : "پاسخ منتور آماده نشد. کمی بعد دوباره تلاش کن.";
+        throw new Error(error);
+      }
+      setMentorChatMessages((current) => [
+        ...current,
+        { role: "user", content },
+        { role: "assistant", content: reply },
+      ]);
+      setMentorChatDraft("");
+    } catch (error) {
+      setMentorChatError(
+        error instanceof Error
+          ? error.message
+          : "ارتباط با منتور برقرار نشد. دوباره تلاش کن.",
+      );
+    } finally {
+      mentorChatBusyRef.current = false;
+      setMentorChatBusy(false);
+    }
+  }
+
   const totalIdeas = state.ideas.length;
   const activeIdeas = state.ideas.filter((idea) => idea.status !== "submitted");
   const averageProgress = totalIdeas
@@ -1255,7 +1562,7 @@ export default function Home() {
 
   return (
     <main
-      className={`app-shell${screen === "home" ? " landing-shell" : screen === "intake" ? " intake-shell" : screen === "dashboard" ? " dashboard-shell" : ["details", "verify", "develop", "review", "submitted", "initial-confirmed"].includes(screen) ? " glass-shell" : ""}`}
+      className={`app-shell${screen === "home" ? " landing-shell" : screen === "intake" ? " intake-shell" : screen === "dashboard" ? " dashboard-shell" : ["details", "verify", "develop", "review", "submitted", "initial-confirmed", "structured"].includes(screen) ? " glass-shell" : ""}`}
     >
       <header
         className={`topbar${screen === "home" || screen === "intake" ? " landing-topbar" : ""}`}
@@ -1265,38 +1572,18 @@ export default function Home() {
           onClick={() => setScreen("home")}
           aria-label="صفحهٔ اصلی جوانه"
         >
-          {screen === "home" ? (
-            <Image
-              className="landing-logo"
-              src="/javaneh-logo.png"
-              alt="رویداد ملی نوآوری اجتماعی جوانه"
-              width={2172}
-              height={724}
-              priority
-            />
-          ) : (
-            <>
-              <span
-                className={`brand-mark${screen === "intake" ? " landing-brand-mark" : ""}`}
-              >
-                {screen === "intake" ? (
-                  <Sprout size={38} strokeWidth={1.8} aria-hidden="true" />
-                ) : (
-                  <Flower2 size={22} strokeWidth={1.8} />
-                )}
-              </span>
-              <span className="brand-copy">
-                <span className="brand-name">
-                  Javaneh<span className="brand-period">.</span>
-                </span>
-                {screen === "intake" && (
-                  <span className="brand-subtitle">
-                    رویداد ملی نوآوری اجتماعی
-                  </span>
-                )}
-              </span>
-            </>
-          )}
+          <Image
+            className={
+              screen === "home" || screen === "intake"
+                ? "landing-logo"
+                : "brand-logo"
+            }
+            src="/javaneh-logo.png"
+            alt="رویداد ملی نوآوری اجتماعی جوانه"
+            width={2172}
+            height={724}
+            priority={screen === "home"}
+          />
         </button>
         {screen === "home" || screen === "intake" ? (
           <>
@@ -1381,7 +1668,7 @@ export default function Home() {
         <section className="home-view">
           <div className="home-heading landing-heading" id="about">
             <h1>
-              Javaneh
+              جـــــوانه
               <Sprout className="landing-title-sprout" size={40} strokeWidth={2} aria-hidden="true" />
             </h1>
             <p className="landing-subtitle">
@@ -1407,11 +1694,17 @@ export default function Home() {
                   placeholder="ایده‌تان را اینجا بنویسید…"
                   value={seed}
                   onChange={(event) => {
+                    const textarea = event.currentTarget;
+                    textarea.style.height = "auto";
+                    const maxHeight = 240;
+                    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+                    textarea.style.overflowY =
+                      textarea.scrollHeight > maxHeight ? "auto" : "hidden";
                     setSeed(event.target.value);
                     setFormError("");
                   }}
                   rows={1}
-                  maxLength={1200}
+                  maxLength={600}
                   dir="auto"
                   aria-describedby="seed-hint seed-error"
                 />
@@ -1426,7 +1719,7 @@ export default function Home() {
                 type="button"
                 className="primary-button landing-choice landing-choice-primary"
                 onClick={startIdea}
-                disabled={!seed.trim() || !canCreateIdea(state)}
+                disabled={!seed.trim() || !canCreateIdea(state, registrations.length)}
               >
                 <span className="landing-choice-icon">
                   <Sprout size={24} strokeWidth={1.8} aria-hidden="true" />
@@ -1439,15 +1732,18 @@ export default function Home() {
               <button
                 type="button"
                 className="landing-choice landing-choice-secondary"
-                disabled
-                title="ثبت ایده به‌زودی فعال می‌شود."
+                onClick={startStructuredRegistration}
+                disabled={
+                  !registrations.some((item) => item.status === "draft") &&
+                  !canCreateIdea(state, registrations.length)
+                }
               >
                 <span className="landing-choice-icon">
                   <FileText size={22} strokeWidth={1.8} aria-hidden="true" />
                 </span>
                 <span className="landing-choice-copy">
                   <b>
-                    ثبت ایده <span className="landing-choice-status">به‌زودی</span>
+                    {registrations.some((item) => item.status === "draft") ? "ادامهٔ ثبت ایده" : "ثبت ایده"}
                   </b>
                   <small>ایده‌تان را برای رویداد ثبت کنید</small>
                 </span>
@@ -1458,7 +1754,7 @@ export default function Home() {
                 <Info size={16} aria-hidden="true" />
                 ایده‌تان را بنویسید و نخستین گام را برای نوآوری بردارید
               </span>
-              {seed && <span>{formatNumber(seed.length)}/{formatNumber(1200)}</span>}
+              <span>{formatNumber(seed.length)}/{formatNumber(600)}</span>
             </div>
             {formError && (
               <p className="inline-error" id="seed-error" role="alert">
@@ -1467,12 +1763,12 @@ export default function Home() {
             )}
             {!formError && (
               <p className="sr-only" id="seed-error">
-                مسئله‌ای اجتماعی یا ایده‌تان را بنویسید. حداکثر ۱۲۰۰ نویسه.
+                مسئله‌ای اجتماعی یا ایده‌تان را بنویسید. حداکثر ۶۰۰ نویسه.
               </p>
             )}
-            {!canCreateIdea(state) && (
+            {!canCreateIdea(state, registrations.length) && (
               <p className="capacity-note">
-                به سقف ایده‌ها رسیده‌اید. برای ادامه یکی از ایده‌های ذخیره‌شده را باز کنید.
+                به سقف سه ثبت در این مرورگر رسیده‌اید. برای ادامه یکی از ثبت‌های ذخیره‌شده را باز کنید.
               </p>
             )}
           </div>
@@ -1501,19 +1797,55 @@ export default function Home() {
             <p className="landing-faq-kicker">هر ایدهٔ خوبی می‌تواند از قدمی کوچک آغاز شود</p>
             <h2 id="landing-faq-title">پرسش‌های متداول</h2>
             <details>
-              <summary>ایدهٔ من کجا ذخیره می‌شود؟</summary>
+              <summary>رویداد ملی نوآوری اجتماعی جوانه با چه هدفی برگزار می‌شود؟</summary>
               <p>
-                {labels.localNotice} هیچ اطلاعاتی برای برگزارکنندگان رویداد ارسال نمی‌شود.
+                این رویداد با هدف شناسایی، گردآوری و حمایت از ایده‌ها و راه‌حل‌های نوآورانه اجتماعی برگزار می‌شود. در نخستین دوره، تمرکز اصلی بر فعال‌سازی ظرفیت کنشگری مردم برای مواجهه با جنگ اقتصادی و تبدیل ظرفیت‌های پراکنده اجتماعی به کنش‌های مؤثر، جمعی و پایدار است.
               </p>
             </details>
             <details>
-              <summary>آیا ایده‌ام باید کامل باشد؟</summary>
+              <summary>چه کسانی می‌توانند در رویداد جوانه شرکت کنند؟</summary>
               <p>
-                خیر. با مسئله‌ای که دیده‌اید شروع کنید و ایده را با پرسش‌های کاربردی، قدم‌به‌قدم شکل دهید.
+                تمام افراد دارای ایده، متخصصان، دانشگاهیان، فعالان اجتماعی، گروه‌های مردمی، سازمان‌های مردم‌نهاد و سایر علاقه‌مندان به حل مسائل اجتماعی می‌توانند در این رویداد مشارکت کنند. هدف رویداد فراهم‌کردن بستری برای حضور طیف متنوعی از صاحبان ایده و تجربه است.
+              </p>
+            </details>
+            <details>
+              <summary>ایده‌های قابل پذیرش در رویداد باید چه ویژگی‌هایی داشته باشند؟</summary>
+              <p>
+                ایده‌ها باید با مسئله اصلی رویداد و محورهای شش‌گانه آن ارتباط داشته باشند و بتوانند به فعال‌سازی ظرفیت‌های مردمی برای مواجهه با فشارها و پیامدهای اقتصادی کمک کنند. ایده‌ها الزاماً نباید فناورانه، استارتاپی یا مبتنی بر راه‌اندازی کسب‌وکار باشند و می‌توانند در قالب الگوهای مشارکت، یاریگری، ابتکارات فرهنگی و رسانه‌ای، مداخلات رفتاری و مدل‌های اقتصادی و اجتماعی ارائه شوند.
+              </p>
+            </details>
+            <details>
+              <summary>ایده‌ها چگونه ارزیابی و داوری می‌شوند؟</summary>
+              <p>
+                ایده‌های دریافتی ابتدا از نظر انطباق با موضوع و محورهای رویداد بررسی می‌شوند و سپس در فرایندی تخصصی مورد ارزیابی قرار می‌گیرند. معیارهای ارزیابی شامل ارتباط با مسئله، نوآوری و تمایز، ظرفیت فعال‌سازی مشارکت مردم، امکان‌پذیری اولیه، ظرفیت اثرگذاری اجتماعی و قابلیت تداوم یا توسعه ایده است.
+              </p>
+            </details>
+            <details>
+              <summary>آیا ثبت یا انتخاب یک ایده به معنای تضمین حمایت مالی یا اجرای آن است؟</summary>
+              <p>
+                خیر. هدف رویداد شناسایی و گردآوری ایده‌های نوآورانه و فراهم‌کردن زمینه معرفی آن‌ها به دستگاه‌ها و نهادهای مرتبط برای بهره‌برداری احتمالی است. ثبت یا حتی انتخاب یک ایده، به‌خودی‌خود تعهدی برای خرید ایده، انعقاد قرارداد، مشارکت در اجرا یا پرداخت حق‌الزحمه ایجاد نمی‌کند. از صاحبان ایده‌های برتر در قالب جوایز رویداد تقدیر خواهد شد.
               </p>
             </details>
           </section>
         </section>
+      )}
+
+      {screen === "structured" && activeRegistration && (
+        <StructuredRegistrationForm
+          registration={activeRegistration}
+          storageError={storageError}
+          onChange={persistRegistration}
+          onBack={() => {
+            setActiveRegistration(null);
+            setScreen("home");
+          }}
+          onSubmit={(registration) => submitRegistration({
+            ...registration,
+            status: "submitted",
+            submittedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })}
+        />
       )}
 
       {screen === "details" && (
@@ -2077,11 +2409,13 @@ export default function Home() {
               onClick={() => setScreen("home")}
               aria-label="صفحهٔ اصلی جوانه"
             >
-              <span className="dashboard-sidebar-mark">
-                <Sprout size={38} aria-hidden="true" />
-              </span>
-              <b>Javaneh</b>
-              <span>رویداد ملی<br />نوآوری اجتماعی</span>
+              <Image
+                className="dashboard-sidebar-logo"
+                src="/javaneh-logo.png"
+                alt="رویداد ملی نوآوری اجتماعی جوانه"
+                width={2172}
+                height={724}
+              />
             </button>
             <nav className="dashboard-nav" aria-label="فضای کار">
               <button
@@ -2172,14 +2506,6 @@ export default function Home() {
                   </p>
                 </div>
               </div>
-              <div className="dashboard-hero-art" aria-hidden="true">
-                <span className="dashboard-orbit dashboard-orbit-one" />
-                <span className="dashboard-orbit dashboard-orbit-two" />
-                <span className="dashboard-orb">
-                  <Sprout size={76} strokeWidth={1.5} />
-                </span>
-                <span className="dashboard-soil" />
-              </div>
             </div>
 
             <div className="dashboard-summary">
@@ -2238,7 +2564,7 @@ export default function Home() {
                   setScreen("home");
                   setSeed("");
                 }}
-                disabled={!canCreateIdea(state)}
+                disabled={!canCreateIdea(state, registrations.length)}
               >
                 <span className="dashboard-add-icon">
                   <Plus size={26} aria-hidden="true" />
@@ -2419,10 +2745,10 @@ export default function Home() {
               ))}
             </div>
           )}
-          {totalIdeas === 3 && (
+          {!canCreateIdea(state, registrations.length) && (
             <p className="limit-note">
               <LockKeyhole size={15} />
-              به سقف سه ایده رسیده‌اید. ایده‌های موجود همچنان در این مرورگر در دسترس‌اند.
+              به سقف سه ثبت در این مرورگر رسیده‌اید. ایده‌ها و ثبت‌های موجود همچنان در این مرورگر می‌مانند.
             </p>
           )}
             </section>
@@ -2435,26 +2761,22 @@ export default function Home() {
                 </div>
               </div>
               <p>
-                هنگام شکل‌دادن و توسعهٔ ایده، راهنمایی سنجیده و گام‌به‌گام بگیرید.
+                دربارهٔ ثبت ایده، قدم‌های بعدی یا هر ایده‌ای که در ذهنتان دارید، راحت و بی‌تکلف گفت‌وگو کنید.
               </p>
               <button
                 className="dashboard-mentor-action"
                 onClick={() => {
-                  if (activeIdeas.length) {
-                    routeToIdea(activeIdeas[0]);
-                  } else {
-                    setScreen("home");
-                    setSeed("");
-                  }
+                  setMentorChatError("");
+                  setMentorChatOpen(true);
                 }}
-                disabled={!activeIdeas.length && !canCreateIdea(state)}
               >
                 <MessageCircle size={18} aria-hidden="true" />
-                <span>
-                  {activeIdeas.length ? "ادامه با راهنما" : "شروع با راهنما"}
-                </span>
-                <ArrowRight size={16} aria-hidden="true" />
+                <span>گفت‌وگو با منتور</span>
+                <ArrowLeft size={16} aria-hidden="true" />
               </button>
+              <span className="dashboard-mentor-hint">
+                دربارهٔ ایده‌هایت بپرس؛ منتور اینجاست تا با هم قدم بعدی را پیدا کنید.
+              </span>
             </aside>
           </div>
           {(storageError || tokenNotice) && (
@@ -2478,6 +2800,129 @@ export default function Home() {
           </p>
           </div>
         </section>
+      )}
+
+      {screen === "dashboard" && mentorChatOpen && (
+        <div
+          className="mentor-chat-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setMentorChatOpen(false);
+          }}
+        >
+          <section
+            className="mentor-chat-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mentor-chat-title"
+          >
+            <div className="mentor-chat-topline">
+              <span className="mentor-chat-avatar" aria-hidden="true">
+                <Sparkles size={20} />
+              </span>
+              <div className="mentor-chat-person">
+                <b id="mentor-chat-title">گفت‌وگو با منتور جوانه</b>
+                <span><i /> همراه شما در مسیر ایده</span>
+              </div>
+              <span className="mentor-chat-badge">
+                <Sparkles size={14} /> همراه هوشمند
+              </span>
+              <button
+                type="button"
+                className="mentor-chat-close"
+                aria-label="بستن گفت‌وگو"
+                onClick={() => setMentorChatOpen(false)}
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="mentor-chat-thread" aria-live="polite">
+              <div className="mentor-chat-date">گفت‌وگوی امروز</div>
+              {mentorChatMessages.map((message, index) => (
+                <div
+                  className={`mentor-chat-row${message.role === "user" ? " is-user" : " is-mentor"}`}
+                  key={`${message.role}-${index}`}
+                >
+                  {message.role === "assistant" && (
+                    <span className="mentor-chat-mini-avatar" aria-hidden="true">
+                      <Sparkles size={13} />
+                    </span>
+                  )}
+                  <p dir="auto"><bdi>{message.content}</bdi></p>
+                </div>
+              ))}
+              {mentorChatBusy && (
+                <div className="mentor-chat-row is-mentor">
+                  <span className="mentor-chat-mini-avatar" aria-hidden="true">
+                    <Sparkles size={13} />
+                  </span>
+                  <p className="mentor-chat-typing">
+                    <i /><i /><i /> منتورت دارد فکر می‌کند
+                  </p>
+                </div>
+              )}
+              <div ref={mentorChatEndRef} />
+            </div>
+            {mentorChatMessages.length === 1 && (
+              <div className="mentor-chat-suggestions" aria-label="پیشنهاد برای شروع گفت‌وگو">
+                <span>از این سؤال‌ها شروع کن</span>
+                {[
+                  "برای شروع ثبت ایده باید چه‌کار کنم؟",
+                  "مرحله‌های پرورش ایده چه هستند؟",
+                  "برای بهتر کردن ایده‌ام از کجا شروع کنم؟",
+                ].map((prompt) => (
+                  <button
+                    type="button"
+                    key={prompt}
+                    onClick={() => setMentorChatDraft(prompt)}
+                  >
+                    {prompt} <ArrowLeft size={13} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {mentorChatError && (
+              <p className="mentor-chat-error" role="alert">
+                {mentorChatError}
+              </p>
+            )}
+            <form
+              className="mentor-chat-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void sendMentorChatMessage();
+              }}
+            >
+              <textarea
+                ref={mentorChatInputRef}
+                value={mentorChatDraft}
+                onChange={(event) => setMentorChatDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendMentorChatMessage();
+                  }
+                }}
+                maxLength={1200}
+                rows={2}
+                placeholder="هرچه دوست داری از منتورت بپرس…"
+                aria-label="پیام شما به منتور"
+                disabled={mentorChatBusy}
+              />
+              <button
+                type="submit"
+                disabled={mentorChatBusy || !mentorChatDraft.trim()}
+                aria-label="ارسال پیام"
+              >
+                <Send size={18} aria-hidden="true" />
+              </button>
+              <span>Enter برای ارسال · Shift + Enter برای خط بعد</span>
+            </form>
+            <p className="mentor-chat-footnote">
+              <ShieldCheck size={14} aria-hidden="true" />
+              برای پاسخ‌گویی، پیام و بخش‌های مرتبط ایده‌ها به سرویس هوش مصنوعی فرستاده می‌شود؛ اطلاعات هویتی و تماس را ننویس.
+            </p>
+          </section>
+        </div>
       )}
 
       {screen === "develop" && activeIdea && (

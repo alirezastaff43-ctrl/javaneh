@@ -41,6 +41,7 @@ export type Idea = {
   tokens: TokenEntry[];
   intakeIndex?: number;
   developmentIndex?: number;
+  invalidResponseCount?: number;
   intakeSummary?: string;
   draftAnswer?: string;
   mentorNextQuestion?: {
@@ -99,8 +100,8 @@ export const emptyState = (): AppState => ({
   ideas: [],
 });
 
-export function canCreateIdea(state: AppState): boolean {
-  return state.ideas.length < MAX_IDEAS;
+export function canCreateIdea(state: AppState, reservedSlots = 0): boolean {
+  return state.ideas.length + Math.max(0, Math.floor(reservedSlots)) < MAX_IDEAS;
 }
 
 export function removeIdea(state: AppState, ideaId: string): AppState {
@@ -258,6 +259,9 @@ function normalizeIdea(value: unknown): Idea | null {
       : 0,
     developmentIndex: Number.isInteger(idea.developmentIndex)
       ? Math.min(10, Math.max(0, idea.developmentIndex!))
+      : 0,
+    invalidResponseCount: Number.isInteger(idea.invalidResponseCount)
+      ? Math.min(3, Math.max(0, idea.invalidResponseCount!))
       : 0,
   };
   if (typeof idea.intakeSummary === "string")

@@ -15,8 +15,9 @@ Open the URL printed by Next.js (normally `http://localhost:3000`). Run `npm tes
 
 - The app works without credentials. Without a configured provider key, opening and follow-up questions use a personalized deterministic demo flow. Demo verification accepts any 4–8 digit number; no SMS is sent.
 - The national ID and mobile number are used only in transient form state during the simulated verification step. They are cleared after verification and are not persisted or sent to the mentor. Only a display name and verified flag are stored.
-- Ideas, answers, proposals, token history, and deadlines are stored in this browser's `localStorage` under a versioned schema. Data is not secure, backed up, shared across devices, or recoverable after browser storage is cleared. Avoid entering sensitive information.
-- The three-idea limit applies to the saved data in this browser only. Reliable per-person limits and cross-device identity require a future backend.
+- Ideas, answers, proposals, token history, and deadlines are stored in this browser's `localStorage` under a versioned schema. Structured-registration drafts and completed local registrations use a separate versioned key so they do not change the existing `Idea` schema. Data is not secure, backed up, shared across devices, or recoverable after browser storage is cleared. Avoid entering sensitive information.
+- Structured registration asks for a full name and province/city, with email, education, activity background, audience, and future-news preference optional. It does not ask for a mobile number, national ID, or verification code. Drafts are saved locally as entered; final confirmation means only that the browser stored the registration, not that it was sent to organizers or synchronized to an account.
+- The three-item limit is shared by ideas from either path and structured registrations, and applies to saved data in this browser only. Reliable per-person limits and cross-device identity require a future backend.
 - A deferred review uses a precise local 72-hour timestamp. The app checks expiry while open and on its next load; no background job runs while the browser is closed. Deferred submission is not delivered to event organizers.
 - Tokens are a deterministic, auditable demo contribution score, not an official event rubric, ranking, or guarantee.
 

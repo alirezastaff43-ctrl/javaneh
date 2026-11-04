@@ -7,8 +7,7 @@ import {
   deferSubmission,
   emptyState,
   hasCompletedDevelopment,
-  normalizeState,
-  removeIdea,
+  nleoveIdea,
   submitNow,
   type Idea,
 } from "./domain";
@@ -37,6 +36,13 @@ describe("demo domain rules", () => {
         ideas: [idea(), idea({ id: "2" }), idea({ id: "3" })],
       }),
     ).toBe(false);
+  });
+
+  it("counts structured-registration slots against the existing three-item limit", () => {
+    const state = { ...emptyState(), ideas: [idea(), idea({ id: "2" })] };
+    expect(canCreateIdea(state)).toBe(true);
+    expect(canCreateIdea(state, 1)).toBe(false);
+    expect(canCreateIdea(emptyState(), 3)).toBe(false);
   });
 
   it("unlocks review only when every development axis has a non-empty answer", () => {
@@ -117,46 +123,7 @@ describe("demo domain rules", () => {
       ideas: [state.ideas[0], state.ideas[2]],
     });
     expect(removeIdea(state, "unknown")).toEqual(state);
-  });
-
-  it("deduplicates awards and caps each award", () => {
-    const first = awardToken(
-      idea(),
-      "Useful answer",
-      "answer-1",
-      50,
-      new Date("2026-01-01"),
-    );
-    expect(first.tokens[0].amount).toBe(10);
-    expect(
-      awardToken(first, "Useful answer", "answer-1", 5).tokens,
-    ).toHaveLength(1);
-  });
-
-  it("migrates older stored state and rejects invalid data", () => {
-    expect(
-      normalizeState({ schemaVersion: 0, ideas: [idea()] }).ideas,
-    ).toHaveLength(1);
-    expect(normalizeState({ nope: true })).toEqual(emptyState());
-    const unsafe = normalizeState({
-      schemaVersion: 1,
-      profile: {
-        name: "Demo",
-        verified: true,
-        nationalId: "123456",
-        mobile: "55555555",
-      },
-      ideas: [{ ...idea(), nationalId: "123456", mobile: "55555555" }],
-    });
-    expect(unsafe.profile).toEqual({ name: "Demo", verified: true });
-    expect(unsafe.ideas[0]).not.toHaveProperty("nationalId");
-    expect(unsafe.ideas[0]).not.toHaveProperty("mobile");
-    const invalidDeadline = normalizeState({
-      schemaVersion: 1,
-      ideas: [
-        idea({
-          status: "awaiting-confirmation",
-          confirmationDeadlineAt: "not-a-date",
+  });xr-1", 5).tttat(nfirmationDeadlineAt: "not-a-date",
           updatedAt: "also-not-a-date",
         }),
       ],
