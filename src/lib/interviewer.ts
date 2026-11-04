@@ -6,31 +6,26 @@ export type InterviewStage = "initial" | "development";
 export const INTAKE_AXES = [
   {
     section: "The problem",
-    label: "مسئله",
     question: "کدام بخش از این مسئله را خودت دیده‌ای؟",
     focusTerms: ["مسئله", "دیده‌ای"],
   },
   {
     section: "People affected",
-    label: "افراد درگیر",
     question: "این مسئله بیشتر روی زندگی چه کسانی اثر می‌گذارد؟",
     focusTerms: ["چه کسانی", "اثر"],
   },
   {
     section: "What is known",
-    label: "دانسته‌ها",
     question: "به نظرت چه چیزی باعث ادامهٔ این مسئله شده است؟",
     focusTerms: ["چه چیزی", "ادامه", "علت"],
   },
   {
     section: "Your idea",
-    label: "ایدهٔ تو",
     question: "دوست داری برای روبه‌روشدن با این مسئله چه راهکاری را امتحان کنی؟",
     focusTerms: ["راهکار", "امتحان"],
   },
   {
     section: "Your connection",
-    label: "ارتباط تو با مسئله",
     question: "چه چیزی باعث شده به این مسئله توجه کنی؟",
     focusTerms: ["چه چیزی", "توجه"],
   },
@@ -296,13 +291,19 @@ export function createDemoDecision(
   const answerQuote = request.answer.trim();
   const canQuoteAnswer =
     answerQuote.length <= 60 && !/[؟?]/u.test(answerQuote);
-  const nextQuestion =
-    isUnsure || !canQuoteAnswer
-      ? nextAxis.question
-      : `گفتی «\u2068${answerQuote}\u2069»؛ ${nextAxis.question}`;
+  const safeSeed = redactPersonalData(request.seed.trim())
+    .replace(/[؟?]/gu, "")
+    .replace(/\s+/gu, " ")
+    .slice(0, 60)
+    .trim();
+  const nextQuestion = safeSeed
+    ? `برای ایدهٔ «${safeSeed}»، ${nextAxis.question}`
+    : nextAxis.question;
   const questionContext = [
     isUnsure ? "لازم نیست از همین حالا پاسخ قطعی داشته باشی." : "",
+    safeSeed ? `در ارتباط با «${safeSeed}»،` : "",
     questionContextForAxis(nextSection),
+    "برای نمونه، می‌توانی از یک موقعیت کوچک یا چیزی که خودت دیده‌ای شروع کنی.",
   ]
     .filter(Boolean)
     .join("؛ ");

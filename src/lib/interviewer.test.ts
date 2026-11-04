@@ -34,9 +34,8 @@ describe("Persian interview questions", () => {
 
         expect(validateInterviewDecision(decision, request)).toBe(true);
         if (request.remainingSections.length > 0) {
-          expect(decision.nextQuestion).toBe(
-            axes[index + 1].question,
-          );
+          expect(decision.nextQuestion).toContain(request.seed);
+          expect(decision.nextQuestion).toContain(axes[index + 1].question);
           expect(decision.questionContext).toBeTruthy();
           expect(decision.questionContext).toMatch(/[آ-ی]/u);
           expect(decision.questionContext).not.toMatch(/[؟?]/u);
@@ -47,7 +46,7 @@ describe("Persian interview questions", () => {
     },
   );
 
-  it("keeps a participant's answer intact in the localized follow-up", () => {
+  it("personalizes the localized follow-up from the starting idea", () => {
     const axes = axesForStage("initial");
     const request: InterviewRequest = {
       seed: "A community issue",
@@ -63,8 +62,9 @@ describe("Persian interview questions", () => {
     };
     const decision = createDemoDecision(request);
 
-    expect(decision.nextQuestion).toContain("چراغ پارک شب‌ها خاموش می‌ماند");
-    expect(decision.questionContext).toContain("نیازهای واقعی");
+    expect(decision.mentorMessage).toContain("چراغ پارک شب‌ها خاموش می‌ماند");
+    expect(decision.nextQuestion).toContain(request.seed);
+    expect(decision.questionContext).toContain("برای نمونه");
     expect(validateInterviewDecision(decision, request)).toBe(true);
   });
 

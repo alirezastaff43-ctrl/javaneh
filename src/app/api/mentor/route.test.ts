@@ -524,7 +524,10 @@ describe("adaptive interview route", () => {
 
     expect(response.status).toBe(200);
     expect(result.mode).toBe("demo");
-    expect(result.nextQuestion).toContain("چراغ مسیر پیاده‌رو شب‌ها خاموش می‌ماند");
+    expect(result.mentorMessage).toContain(
+      "چراغ مسیر پیاده‌رو شب‌ها خاموش می‌ماند",
+    );
+    expect(result.nextQuestion).toContain(requestBody().seed);
     expect(result.nextQuestion).toContain(INTAKE_AXES[1].question);
     expect(result.questionContext).toContain("نیازهای واقعی");
     expect(result.nextSection).toBe(INTAKE_AXES[1].section);

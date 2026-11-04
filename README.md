@@ -13,7 +13,7 @@ Open the URL printed by Next.js (normally `http://localhost:3000`). Run `npm tes
 
 ## Demo behavior and privacy
 
-- The app works without credentials. With no `OPENROUTER_API_KEY` or legacy `AI_API_KEY`, mentor turns use a deterministic demo mentor. Demo verification accepts any 4–8 digit number; no SMS is sent.
+- The app works without credentials. Without a configured provider key, opening and follow-up questions use a personalized deterministic demo flow. Demo verification accepts any 4–8 digit number; no SMS is sent.
 - The national ID and mobile number are used only in transient form state during the simulated verification step. They are cleared after verification and are not persisted or sent to the mentor. Only a display name and verified flag are stored.
 - Ideas, answers, proposals, token history, and deadlines are stored in this browser's `localStorage` under a versioned schema. Data is not secure, backed up, shared across devices, or recoverable after browser storage is cleared. Avoid entering sensitive information.
 - The three-idea limit applies to the saved data in this browser only. Reliable per-person limits and cross-device identity require a future backend.
@@ -22,13 +22,15 @@ Open the URL printed by Next.js (normally `http://localhost:3000`). Run `npm tes
 
 ## Optional AI provider
 
-The provider adapter is server-side in `src/app/api/mentor/route.ts` and uses an OpenAI-compatible chat-completions endpoint. To use AvalAI, configure these server-only variables:
+The provider adapter is server-side in `src/app/api/mentor/route.ts` and `src/app/api/mentor/opening/route.ts`; both use the same OpenAI-compatible provider configuration. The first question is generated from the participant's starting idea, and follow-up questions use the answers and conversation history. To use AvalAI, configure these server-only variables:
 
 ```env
 AVALAI_API_KEY=your-server-side-key
 AI_MODEL=gpt-5.6-luna
 AI_BASE_URL=https://api.avalai.ir/v1
 ```
+
+For local development, paste your key into `AVALAI_API_KEY` in the ignored `.env.local` file at the project root, then restart `npm run dev`. Do not commit or share that file. For deployment, add the same variables through the hosting provider's server-side environment settings.
 
 The route calls `.../chat/completions` and sends AvalAI's `AVALAI_API_KEY` only to `api.avalai.ir`. `AI_MODEL` can be changed to any model available to your AvalAI account. For Google's Gemini OpenAI compatibility endpoint (not the native `generateContent` API), use `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) with:
 

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isPersianText } from "@/lib/locale";
 import { redactPersonalData } from "@/lib/privacy";
+import { getProviderConfiguration } from "@/lib/provider";
 import {
   axesForStage,
   createDemoDecision,
@@ -56,82 +57,6 @@ const INITIAL_RETRY_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 8_000;
 
 export const maxDuration = 60;
-
-type ProviderConfiguration = {
-  apiKey: string;
-  endpoint: string;
-  model: string;
-};
-
-function getProviderConfiguration():
-  | { configuration: ProviderConfiguration }
-  | { error: "invalid_endpoint" | "missing_provider_key" | "mismatched_provider_key" } {
-  const baseUrl = process.env.AI_BASE_URL || "https://openrouter.ai/api/v1";
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    return { error: "invalid_endpoint" };
-  }
-  if (
-    (url.protocol !== "https:" &&
-      !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  )
-    return { error: "invalid_endpoint" };
-
-  const isGemini = url.hostname === "generativelanguage.googleapis.com";
-  const isAvalai = url.hostname === "api.avalai.ir";
-  const hasAnyKey = [
-    process.env.AVALAI_API_KEY,
-    process.env.GEMINI_API_KEY,
-    process.env.GOOGLE_API_KEY,
-    process.env.OPENROUTER_API_KEY,
-    process.env.AI_API_KEY,
-  ].some((key) => Boolean(key?.trim()));
-  let apiKey: string | undefined;
-  if (isAvalai) {
-    apiKey = process.env.AVALAI_API_KEY?.trim();
-  } else if (isGemini) {
-    apiKey =
-      process.env.GEMINI_API_KEY?.trim() ||
-      process.env.GOOGLE_API_KEY?.trim() ||
-      process.env.AI_API_KEY?.trim();
-  } else if (url.hostname === "openrouter.ai") {
-    apiKey =
-      process.env.OPENROUTER_API_KEY?.trim() || process.env.AI_API_KEY?.trim();
-  } else {
-    apiKey =
-      process.env.AI_API_KEY?.trim() ||
-      process.env.OPENROUTER_API_KEY?.trim() ||
-      process.env.GEMINI_API_KEY?.trim() ||
-      process.env.GOOGLE_API_KEY?.trim();
-  }
-
-  if (!apiKey)
-    return {
-      error: hasAnyKey ? "mismatched_provider_key" : "missing_provider_key",
-    };
-
-  const normalizedBaseUrl = url.toString().replace(/\/+$/, "");
-  const endpoint = normalizedBaseUrl.endsWith("/chat/completions")
-    ? normalizedBaseUrl
-    : `${normalizedBaseUrl}/chat/completions`;
-  const model =
-    process.env.AI_MODEL?.trim() ||
-    (isAvalai
-      ? "gpt-5.6-luna"
-      : isGemini
-        ? "gemini-2.5-flash"
-        : "google/gemma-4-26b-a4b-it:free");
-  if (!model || model.length > 200)
-    return { error: "invalid_endpoint" };
-
-  return { configuration: { apiKey, endpoint, model } };
-}
 
 function parseRetryAfter(value: string | null, now = Date.now()): number | null {
   if (!value) return null;
@@ -411,7 +336,7 @@ const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر ه�
 
 پرسش بعدی را با توجه به ایدهٔ اولیه، مرحله، پرسش و پاسخ فعلی، سابقهٔ گفت‌وگو و بخش‌های باقی‌مانده انتخاب کن. پرسش ثابت یا پیشنهادی را صرفاً تکرار نکن. به جزئیاتی وصل شو که شرکت‌کننده واقعاً گفته است: اگر پاسخ کلی است نمونه بخواه، فقط ابهام‌ها را روشن کن و یک بخش پیشین را فقط وقتی پوشش‌یافته بدان که پاسخ واقعاً به آن پرداخته باشد. پاسخ را تکرار نکن، پرسش تکراری یا چندبخشی نپرس و بی‌منطق از موضوعی به موضوع دیگر نپر. تصمیم، راهکار یا تجربه‌ای را که شرکت‌کننده نگفته به او نسبت نده. اگر مطمئن نیست، بدون قضاوت راهی ساده و کم‌فشار برای بررسی پیشنهاد بده.
 
-برای هر پرسش بعدی، علاوه بر خود پرسش یک questionContext مستقل بنویس: یک یا دو جملهٔ روشن که توضیح دهد چرا پاسخ به این پرسش در پرورش ایده یا فهم مسئله اهمیت دارد و به گفتهٔ واقعی شرکت‌کننده یا ابهام مشخص در گفت‌وگو وصل باشد. توضیح کلی و تکراری مانند «این موضوع مهم است» کافی نیست. فرض یا جزئیات ناگفته نساز، پاسخ را بازگو نکن، در questionContext سؤال نپرس و آن را حداکثر ۳۶۰ نویسه نگه دار. mentorMessage صرفاً واکنشی کوتاه است و جای توضیح چرایی پرسش را نمی‌گیرد.
+برای هر پرسش بعدی، علاوه بر خود پرسش یک questionContext مستقل بنویس: یک یا دو جملهٔ روشن که توضیح دهد چرا پاسخ به این پرسش در پرورش ایده یا فهم مسئله اهمیت دارد و به گفتهٔ واقعی شرکت‌کننده یا ابهام مشخص در گفت‌وگو وصل باشد. هرجا کمک می‌کند، یک مثال ساده و مرتبط یا چند راه برای فکرکردن به پاسخ بده تا پرسش واقعاً قابل‌پاسخ باشد؛ پاسخ را به‌جای شرکت‌کننده نساز و او را به پاسخ خاصی سوق نده. توضیح کلی و تکراری مانند «این موضوع مهم است» کافی نیست. فرض یا جزئیات ناگفته نساز، پاسخ را بازگو نکن، در questionContext سؤال نپرس و آن را حداکثر ۳۶۰ نویسه نگه دار. mentorMessage صرفاً واکنشی کوتاه است و جای توضیح چرایی پرسش را نمی‌گیرد.
 
 محورها راهنمای پوشش‌اند، نه ترتیب اجباری پرسش‌ها. coveredSections فقط باید بخش‌های واجد شرایطِ eligibleCoveredSections را دربرگیرد؛ هرگز answeredSections، skippedSections یا بخشی خارج از eligibleCoveredSections را در آن نیاور. فقط بخش‌هایی را پوشش‌یافته بدان که پاسخ‌های قبلی واقعاً روشن کرده‌اند یا برای این ایده نامرتبط‌اند. از میان بخش‌های باقی‌مانده، مرتبط‌ترین محور حل‌نشده را برای nextSection انتخاب کن؛ اگر از محوری جلوتر می‌روی، همهٔ محورهای واجد شرایط پیش از آن را که واقعاً پاسخ گرفته‌اند در coveredSections بیاور. پاسخ جاری را برای افزودن به coveredSections به‌کار نبر. اگر همهٔ محورهای لازم بررسی شده‌اند یا باقی‌مانده‌ها واقعاً نامرتبط‌اند، stageComplete را true قرار بده و همهٔ eligibleCoveredSections را در coveredSections بیاور. هرگز فقط برای کوتاه‌کردن مسیر، بخش مرتبط و بررسی‌نشده را پوشش‌یافته اعلام نکن.
 

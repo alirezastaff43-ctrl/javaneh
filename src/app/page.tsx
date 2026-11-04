@@ -1,6 +1,6 @@
 "use client";
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -66,6 +66,7 @@ import {
   DEVELOPMENT_AXES as developmentQuestions,
   type InterviewRequest,
 } from "@/lib/interviewer";
+import { isValidOpeningQuestion } from "@/lib/opening-question";
 
 type Screen =
   | "home"
@@ -165,7 +166,7 @@ function displayTokenReason(reason: string) {
   if (knownReasons[reason]) return knownReasons[reason];
   const prefix = "Thoughtful progress: ";
   return reason.startsWith(prefix)
-    ? `پیشرفت در بخش ${displaySection(reason.slice(prefix.length))}`
+    ? "پیشرفت در گفت‌وگوی ایده"
     : isPersianText(reason)
       ? reason
       : "پیشرفت در مسیر پرورش ایده";
@@ -180,9 +181,13 @@ function displayProposalText(value: string) {
 }
 
 function displayIntakeSummary(idea: Idea) {
+  const formattedAnswers = idea.answers
+    .map((answer) => `${answer.question}\n${answer.answer}`)
+    .join("\n\n");
   const generatedSummaries = new Set([
     `${idea.seed}\n\n${idea.answers.map((answer) => `${answer.section}: ${answer.answer}`).join("\n\n")}`,
     `${idea.seed}\n\n${idea.answers.map((answer) => `${displaySection(answer.section)}: ${answer.answer}`).join("\n\n")}`,
+    `${idea.seed}\n\n${formattedAnswers}`,
   ]);
   let matchesLegacyGeneratedSummary =
     idea.intakeSummary?.startsWith(`${idea.seed}\n\n`) ?? false;
@@ -212,7 +217,7 @@ function displayIntakeSummary(idea: Idea) {
     !matchesLegacyGeneratedSummary
   )
     return idea.intakeSummary;
-  return `${idea.seed}\n\n${idea.answers.map((answer) => `${displaySection(answer.section)}: ${answer.answer}`).join("\n\n")}`;
+  return `${idea.seed}\n\n${formattedAnswers}`;
 }
 
 function makeId() {
@@ -293,12 +298,6 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
       questionContext: defaultQuestionContext,
     };
   if (idea.draftAnswer) return base;
-  if (stage === "initial" && index === 0 && idea.seed.length > 20) {
-    return {
-      ...base,
-      question: `گفتی «${idea.seed.slice(0, 95)}${idea.seed.length > 95 ? "…" : ""}». این مسئله را دقیقاً کجا یا چه زمانی می‌بینی؟`,
-    };
-  }
   return base;
 }
 
@@ -361,6 +360,9 @@ export default function Home() {
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [openingBusy, setOpeningBusy] = useState(false);
+  const [openingAttempt, setOpeningAttempt] = useState(0);
+  const openingRequestRef = useRef("");
   const busyRef = useRef(false);
   const [reviewDraft, setReviewDraft] = useState<Record<string, string>>({});
   const [now, setNow] = useState(Date.now());
@@ -487,7 +489,7 @@ export default function Home() {
     }));
   }
 
-  function saveIdeaImmediately(updated: Idea): Idea | null {
+  const saveIdeaImmediately = useCallback((updated: Idea): Idea | null => {
     const savedIdea = { ...updated, updatedAt: new Date().toISOString() };
     const currentState = stateRef.current;
     const nextState: AppState = {
@@ -505,9 +507,10 @@ export default function Home() {
       );
       return null;
     }
-    commitState(nextState);
+    stateRef.current = nextState;
+    setState(nextState);
     return savedIdea;
-  }
+  }, []);
 
   function deleteIdea(idea: Idea) {
     if (
@@ -866,7 +869,7 @@ export default function Home() {
       intakeSummary:
         reviewDraft.summary ||
         activeIdea.intakeSummary ||
-      `${activeIdea.seed}\n\n${activeIdea.answers.map((answer) => `${displaySection(answer.section)}: ${answer.answer}`).join("\n\n")}`,
+      `${activeIdea.seed}\n\n${activeIdea.answers.map((answer) => `${answer.question}\n${answer.answer}`).join("\n\n")}`,
     };
     updated = awardToken(
       updated,
@@ -1058,6 +1061,109 @@ export default function Home() {
         questionContext: questionContextForAxis(developmentQuestions[0].section),
       };
   const initialIndex = activeIdea?.intakeIndex ?? 0;
+  const initialQuestionReady =
+    initialIndex > 0 ||
+    (activeIdea?.pendingTurn?.stage === "initial" &&
+      activeIdea.pendingTurn.index === initialIndex &&
+      activeIdea.pendingTurn.section === intakeQuestions[initialIndex]?.section &&
+      isPersianText(activeIdea.pendingTurn.question)) ||
+    (activeIdea?.mentorNextQuestion?.stage === "initial" &&
+      activeIdea.mentorNextQuestion.index === initialIndex &&
+      activeIdea.mentorNextQuestion.section ===
+        intakeQuestions[initialIndex]?.section &&
+      isPersianText(activeIdea.mentorNextQuestion.text)) ||
+    (activeIdea?.editingProgress?.stage === "initial" &&
+      activeIdea.editingProgress.index === initialIndex &&
+      activeIdea.answers.some(
+        (answer) => answer.section === intakeQuestions[initialIndex]?.section,
+      ));
+
+  useEffect(() => {
+    if (
+      !ready ||
+      screen !== "intake" ||
+      !activeIdea ||
+      initialIndex !== 0 ||
+      initialQuestionReady
+    )
+      return;
+
+    const requestKey = `${activeIdea.id}:${activeIdea.seed}`;
+    if (openingRequestRef.current === requestKey) return;
+    openingRequestRef.current = requestKey;
+    setOpeningBusy(true);
+    setFormError("");
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/mentor/opening", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seed: activeIdea.seed }),
+        });
+        let payload: unknown;
+        try {
+          payload = await response.json();
+        } catch {
+          throw new Error("opening_response_unreadable");
+        }
+        if (
+          !response.ok ||
+          !payload ||
+          typeof payload !== "object" ||
+          !("mode" in payload) ||
+          (payload.mode !== "demo" && payload.mode !== "provider") ||
+          !isValidOpeningQuestion(payload)
+        ) {
+          throw new Error(
+            payload && typeof payload === "object"
+              ? mentorFailureMessage(payload)
+              : "opening_response_invalid",
+          );
+        }
+
+        const currentIdea = stateRef.current.ideas.find(
+          (idea) => idea.id === activeIdea.id,
+        );
+        if (!currentIdea || currentIdea.seed !== activeIdea.seed) return;
+        const savedIdea = saveIdeaImmediately({
+          ...currentIdea,
+          mentorNextQuestion: {
+            stage: "initial",
+            index: 0,
+            section: intakeQuestions[0].section,
+            text: payload.question,
+            questionContext: payload.questionContext,
+          },
+        });
+        if (!savedIdea) return;
+        setMentorMode(payload.mode);
+        setMentorMessage(
+          "از همان ایده‌ای که نوشتی شروع می‌کنیم؛ اگر لازم باشد، پرسش را با پاسخ‌هایت دقیق‌تر می‌کنیم.",
+        );
+      } catch (error) {
+        setFormError(
+          error instanceof Error &&
+            error.message !== "opening_response_unreadable" &&
+            error.message !== "opening_response_invalid"
+            ? error.message
+            : "پرسش آغازین آماده نشد؛ دوباره تلاش کنید. ایدهٔ شما ذخیره است.",
+        );
+        openingRequestRef.current = "";
+      } finally {
+        setOpeningBusy(false);
+      }
+    })();
+  }, [
+    activeIdea,
+    initialIndex,
+    initialQuestionReady,
+    openingAttempt,
+    ready,
+    saveIdeaImmediately,
+    screen,
+  ]);
+
   const devIndex = activeIdea?.developmentIndex ?? 0;
   const pendingAnswer = activeIdea?.pendingTurn
     ? activeIdea.answers.find(
@@ -1520,12 +1626,12 @@ export default function Home() {
                 <span className="intake-start-badge">از اینجا شروع کنید</span>
               </div>
               <div className="mentor-message intake-mentor-message" aria-live="polite">
-                {!busy && <Sparkles size={16} aria-hidden="true" />}
-                {busy ? (
+                {!busy && !openingBusy && <Sparkles size={16} aria-hidden="true" />}
+                {busy || openingBusy ? (
                   <span className="thinking">
                     <i />
                     <i />
-                    <i /> در حال آماده‌کردن پرسش بعدی
+                    <i /> در حال آماده‌کردن پرسش متناسب با ایده‌ات
                   </span>
                 ) : (
                   mentorMessage.slice(0, 240)
@@ -1539,22 +1645,46 @@ export default function Home() {
                   <div>
                     <span className="question-kicker">
                       {initialIndex < 5
-                        ? displaySection(currentQuestion.section)
+                        ? `پرسش ${formatNumber(initialIndex + 1)} از ${formatNumber(5)}`
                         : "آمادهٔ بازبینی"}
                     </span>
-                    {initialIndex < 5 && (
+                    {initialIndex < 5 && initialQuestionReady && (
                       <p className="question-context">
                         {currentQuestion.questionContext}
                       </p>
                     )}
                     <h2 aria-live="polite" aria-atomic="true">
                       {initialIndex < 5
-                        ? currentQuestion.question
+                        ? initialQuestionReady
+                          ? currentQuestion.question
+                          : openingBusy
+                            ? "داریم نقطهٔ شروع ایده‌ات را بررسی می‌کنیم."
+                            : "پرسش آغازین هنوز آماده نشده است."
                         : "خلاصهٔ اولیهٔ ایده آماده است."}
                     </h2>
                   </div>
                 </div>
-                {initialIndex < 5 &&
+                {initialIndex < 5 && !initialQuestionReady ? (
+                  <div className="pending-answer">
+                    {formError && (
+                      <p className="inline-error" role="alert">
+                        {formError}
+                      </p>
+                    )}
+                    {!openingBusy && (
+                      <button
+                        className="primary-button"
+                        onClick={() => {
+                          openingRequestRef.current = "";
+                          setFormError("");
+                          setOpeningAttempt((attempt) => attempt + 1);
+                        }}
+                      >
+                        دوباره تلاش کنید <ArrowRight size={18} />
+                      </button>
+                    )}
+                  </div>
+                ) : initialIndex < 5 &&
                 activeIdea.pendingTurn?.stage === "initial" ? (
                   <div className="pending-answer">
                     <p className="review-hint">
@@ -1690,7 +1820,17 @@ export default function Home() {
                           .replace(/\s+/g, " ")
                           .slice(0, 48)
                           .replace(/[.!?؟]$/, "") || "ایدهٔ بدون عنوان";
-                        updateIdea({ ...activeIdea, seed: nextSeed, title });
+                        updateIdea({
+                          ...activeIdea,
+                          seed: nextSeed,
+                          title,
+                          ...(activeIdea.intakeIndex === 0 &&
+                          !activeIdea.pendingTurn &&
+                          activeIdea.mentorNextQuestion?.stage === "initial" &&
+                          activeIdea.mentorNextQuestion.index === 0
+                            ? { mentorNextQuestion: undefined }
+                            : {}),
+                        });
                         setSeedEditOpen(false);
                         setFormError("");
                       }}
@@ -1769,7 +1909,7 @@ export default function Home() {
                         formatNumber(index + 1)
                       )}
                     </span>
-                    <span>{displaySection(item.section)}</span>
+                    <span>پرسش {formatNumber(index + 1)}</span>
                   </div>
                 ))}
               </div>
@@ -1789,11 +1929,18 @@ export default function Home() {
                   )
                   .map((answer) => (
                     <div className="answer-history-row" key={answer.section}>
-                      <span>{displaySection(answer.section)}</span>
+                      <span>
+                        پاسخ{" "}
+                        {formatNumber(
+                          intakeQuestions.findIndex(
+                            (question) => question.section === answer.section,
+                          ) + 1,
+                        )}
+                      </span>
                       <button
                         className="text-button"
                         onClick={() => editAnswer(activeIdea, answer)}
-                        aria-label={`ویرایش پاسخ شما دربارهٔ ${displaySection(answer.section)}`}
+                        aria-label={`ویرایش پاسخ ${formatNumber(intakeQuestions.findIndex((question) => question.section === answer.section) + 1)}`}
                       >
                         ویرایش
                       </button>
