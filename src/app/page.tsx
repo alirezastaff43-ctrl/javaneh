@@ -1,4 +1,5 @@
 "use client";
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -1105,25 +1106,38 @@ export default function Home() {
           onClick={() => setScreen("home")}
           aria-label="صفحهٔ اصلی جوانه"
         >
-          <span
-            className={`brand-mark${screen === "home" || screen === "intake" ? " landing-brand-mark" : ""}`}
-          >
-            {screen === "home" || screen === "intake" ? (
-              <Sprout size={38} strokeWidth={1.8} aria-hidden="true" />
-            ) : (
-              <Flower2 size={22} strokeWidth={1.8} />
-            )}
-          </span>
-          <span className="brand-copy">
-            <span className="brand-name">
-              Javaneh{screen !== "home" && <span className="brand-period">.</span>}
-            </span>
-            {(screen === "home" || screen === "intake") && (
-              <>
-                <span className="brand-subtitle">رویداد ملی نوآوری اجتماعی</span>
-              </>
-            )}
-          </span>
+          {screen === "home" ? (
+            <Image
+              className="landing-logo"
+              src="/javaneh-logo.png"
+              alt="رویداد ملی نوآوری اجتماعی جوانه"
+              width={2172}
+              height={724}
+              priority
+            />
+          ) : (
+            <>
+              <span
+                className={`brand-mark${screen === "intake" ? " landing-brand-mark" : ""}`}
+              >
+                {screen === "intake" ? (
+                  <Sprout size={38} strokeWidth={1.8} aria-hidden="true" />
+                ) : (
+                  <Flower2 size={22} strokeWidth={1.8} />
+                )}
+              </span>
+              <span className="brand-copy">
+                <span className="brand-name">
+                  Javaneh<span className="brand-period">.</span>
+                </span>
+                {screen === "intake" && (
+                  <span className="brand-subtitle">
+                    رویداد ملی نوآوری اجتماعی
+                  </span>
+                )}
+              </span>
+            </>
+          )}
         </button>
         {screen === "home" || screen === "intake" ? (
           <>

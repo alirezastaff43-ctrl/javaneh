@@ -2044,6 +2044,13 @@ input:focus {
   text-align: start;
 }
 
+.landing-logo {
+  display: block;
+  width: min(260px, 100%);
+  height: auto;
+  object-fit: contain;
+}
+
 .landing-brand-mark {
   width: 55px;
   height: 54px;
@@ -2563,6 +2570,10 @@ input:focus {
 
   .landing-brand {
     gap: 7px;
+  }
+
+  .landing-logo {
+    width: min(230px, 58vw);
   }
 
   .landing-brand-mark {
