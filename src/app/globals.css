@@ -2287,6 +2287,109 @@ input:focus {
   min-height: 77px;
 }
 
+.landing-choice-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.landing-composer .landing-choice {
+  min-width: 0;
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgb(214 234 242 / 18%);
+  border-radius: 16px;
+  text-align: start;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.landing-choice-primary,
+.landing-composer .landing-choice-primary:disabled {
+  border-color: rgb(58 232 158 / 63%);
+  color: #05251c;
+  background: linear-gradient(135deg, #76ecad, #16c77a);
+  box-shadow: 0 7px 22px rgb(13 188 117 / 19%), inset 0 1px 1px rgb(255 255 255 / 38%);
+}
+
+.landing-composer .landing-choice-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgb(116 247 184 / 90%);
+  background: linear-gradient(135deg, #91f2bd, #28dc8b);
+  box-shadow: 0 10px 26px rgb(13 188 117 / 28%), inset 0 1px 1px rgb(255 255 255 / 42%);
+}
+
+.landing-composer .landing-choice-primary:disabled {
+  opacity: 0.78;
+  cursor: not-allowed;
+}
+
+.landing-composer .landing-choice-secondary {
+  border-color: rgb(215 230 243 / 17%);
+  color: #e3eaf3;
+  background: linear-gradient(120deg, rgb(43 62 81 / 65%), rgb(29 47 67 / 75%));
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 4%);
+  cursor: not-allowed;
+}
+
+.landing-choice-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  flex: 0 0 42px;
+  place-items: center;
+  border: 1px solid rgb(8 81 56 / 16%);
+  border-radius: 13px;
+  color: #075d3e;
+  background: rgb(255 255 255 / 28%);
+}
+
+.landing-choice-secondary .landing-choice-icon {
+  border-color: rgb(218 233 244 / 13%);
+  color: #b6c8d9;
+  background: rgb(255 255 255 / 5%);
+}
+
+.landing-choice-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.landing-choice-copy b {
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.landing-choice-copy small {
+  color: rgb(13 48 36 / 83%);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.landing-choice-secondary .landing-choice-copy small {
+  color: #b6c3d1;
+}
+
+.landing-choice-status {
+  display: inline-block;
+  margin-inline-start: 4px;
+  padding: 1px 6px;
+  border: 1px solid rgb(196 213 229 / 20%);
+  border-radius: 999px;
+  color: #c3cedb;
+  font-size: 9px;
+  font-weight: 550;
+  vertical-align: middle;
+}
+
 .landing-idea-icon {
   width: 81px;
   display: grid;
@@ -2333,35 +2436,6 @@ input:focus {
   border-color: rgb(73 228 163 / 70%);
   background: linear-gradient(110deg, rgb(46 68 90 / 91%), rgb(48 72 99 / 91%));
   box-shadow: 0 0 0 3px rgb(48 219 147 / 11%), inset 0 1px 1px rgb(255 255 255 / 5%);
-}
-
-.landing-composer .landing-submit {
-  width: 65px;
-  height: 65px;
-  min-height: 65px;
-  display: grid;
-  flex: 0 0 65px;
-  place-items: center;
-  margin-inline: 6px 0;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  color: #fff;
-  background: linear-gradient(145deg, #61e5a1, #0bb66e 76%);
-  box-shadow: 0 8px 22px rgb(0 190 117 / 23%), inset 0 1px 1px rgb(255 255 255 / 31%);
-  cursor: pointer;
-}
-
-.landing-composer .landing-submit:hover:not(:disabled) {
-  transform: translateY(-1px);
-  background: linear-gradient(145deg, #83efb5, #15cb7c 76%);
-  box-shadow: 0 10px 26px rgb(0 210 128 / 31%), inset 0 1px 1px rgb(255 255 255 / 34%);
-}
-
-.landing-composer .landing-submit:disabled {
-  color: rgb(255 255 255 / 88%);
-  opacity: 1;
-  cursor: not-allowed;
 }
 
 .landing-composer-meta {
@@ -2678,16 +2752,36 @@ input:focus {
     font-size: 14px;
   }
 
-  .landing-composer .landing-submit {
-    width: 49px;
-    height: 49px;
-    min-height: 49px;
-    flex-basis: 49px;
-    margin-inline: 0;
+  .landing-choice-actions {
+    gap: 8px;
+    margin-top: 10px;
   }
 
-  .landing-composer .landing-submit svg {
-    width: 24px;
+  .landing-composer .landing-choice {
+    min-height: 64px;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 13px;
+  }
+
+  .landing-choice-icon {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+    border-radius: 10px;
+  }
+
+  .landing-choice-icon svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .landing-choice-copy b {
+    font-size: 12px;
+  }
+
+  .landing-choice-copy small {
+    font-size: 9px;
   }
 
   .landing-composer-meta {
@@ -2788,6 +2882,7 @@ input:focus {
   .landing-nav a,
   .landing-signin,
   .landing-signup,
+  .landing-choice,
   .landing-scroll {
     transition: none;
   }

@@ -1,4 +1,5 @@
 import {
+  DEVELOPMENT_AXES,
   axesForStage,
   findAxis,
   type InterviewStage,
@@ -65,6 +66,27 @@ export type Idea = {
   submittedAt?: string;
   autoSubmitted?: boolean;
 };
+
+export function developmentProgressIndex(
+  idea: Pick<Idea, "answers">,
+): number {
+  const answeredSections = new Set(
+    idea.answers
+      .filter((answer) => answer.answer.trim())
+      .map((answer) => answer.section),
+  );
+  const firstUnanswered = DEVELOPMENT_AXES.findIndex(
+    (axis) => !answeredSections.has(axis.section),
+  );
+  return firstUnanswered < 0 ? DEVELOPMENT_AXES.length : firstUnanswered;
+}
+
+export function hasCompletedDevelopment(
+  idea: Pick<Idea, "answers">,
+): boolean {
+  return developmentProgressIndex(idea) === DEVELOPMENT_AXES.length;
+}
+
 export type AppState = {
   schemaVersion: number;
   profile: { name: string; verified: boolean } | null;

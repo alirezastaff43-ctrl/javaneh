@@ -276,11 +276,21 @@ function validateRequest(input: z.infer<typeof requestSchema>): boolean {
   )
     return false;
 
+  if (
+    input.stage === "development" &&
+    (skipped.size > 0 ||
+      axes
+        .slice(0, input.index)
+        .some((axis) => !answered.has(axis.section)))
+  )
+    return false;
+
   const expectedRemaining = axes
     .slice(input.index + 1)
     .filter(
       (axis) =>
-        !answered.has(axis.section) && !skipped.has(axis.section),
+        !answered.has(axis.section) &&
+        (input.stage === "development" || !skipped.has(axis.section)),
     )
     .map((axis) => axis.section);
   if (
@@ -338,7 +348,7 @@ const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر ه�
 
 برای هر پرسش بعدی، علاوه بر خود پرسش یک questionContext مستقل بنویس: یک یا دو جملهٔ روشن که توضیح دهد چرا پاسخ به این پرسش در پرورش ایده یا فهم مسئله اهمیت دارد و به گفتهٔ واقعی شرکت‌کننده یا ابهام مشخص در گفت‌وگو وصل باشد. هرجا کمک می‌کند، یک مثال ساده و مرتبط یا چند راه برای فکرکردن به پاسخ بده تا پرسش واقعاً قابل‌پاسخ باشد؛ پاسخ را به‌جای شرکت‌کننده نساز و او را به پاسخ خاصی سوق نده. توضیح کلی و تکراری مانند «این موضوع مهم است» کافی نیست. فرض یا جزئیات ناگفته نساز، پاسخ را بازگو نکن، در questionContext سؤال نپرس و آن را حداکثر ۳۶۰ نویسه نگه دار. mentorMessage صرفاً واکنشی کوتاه است و جای توضیح چرایی پرسش را نمی‌گیرد.
 
-محورها راهنمای پوشش‌اند، نه ترتیب اجباری پرسش‌ها. coveredSections فقط باید بخش‌های واجد شرایطِ eligibleCoveredSections را دربرگیرد؛ هرگز answeredSections، skippedSections یا بخشی خارج از eligibleCoveredSections را در آن نیاور. فقط بخش‌هایی را پوشش‌یافته بدان که پاسخ‌های قبلی واقعاً روشن کرده‌اند یا برای این ایده نامرتبط‌اند. از میان بخش‌های باقی‌مانده، مرتبط‌ترین محور حل‌نشده را برای nextSection انتخاب کن؛ اگر از محوری جلوتر می‌روی، همهٔ محورهای واجد شرایط پیش از آن را که واقعاً پاسخ گرفته‌اند در coveredSections بیاور. پاسخ جاری را برای افزودن به coveredSections به‌کار نبر. اگر همهٔ محورهای لازم بررسی شده‌اند یا باقی‌مانده‌ها واقعاً نامرتبط‌اند، stageComplete را true قرار بده و همهٔ eligibleCoveredSections را در coveredSections بیاور. هرگز فقط برای کوتاه‌کردن مسیر، بخش مرتبط و بررسی‌نشده را پوشش‌یافته اعلام نکن.
+در مرحلهٔ ثبت اولیه، محورها راهنمای پوشش‌اند و می‌توانی با توجه به پاسخ‌های قبلی بعضی محورهای واقعاً روشن‌شده را رد کنی؛ coveredSections فقط باید بخش‌های واجد شرایطِ eligibleCoveredSections را دربرگیرد. اما در مرحلهٔ توسعه، هر ده محور DEVELOPMENT_AXES باید جداگانه پاسخ داده شوند: پاسخ‌های ثبت اولیه فقط زمینه‌اند و جای پاسخ مرحلهٔ دوم را نمی‌گیرند، هیچ محوری را به‌عنوان نامرتبط یا پوشش‌یافته رد نکن، coveredSections را خالی بگذار و stageComplete را فقط وقتی true کن که همهٔ محورها در answeredSections پاسخ دارند. اگر مرحله کامل نیست، nextSection باید اولین محور بی‌پاسخ به ترتیب فهرست باشد. در هیچ مرحله‌ای answeredSections یا skippedSections را در coveredSections نیاور و بخش بررسی‌نشده را فقط برای کوتاه‌کردن مسیر رد نکن.
 
 در هر نوبت، mentorMessage باید در یک یا دو جملهٔ کوتاه و دقیق نشان دهد از پاسخ جاری چه فهمیده‌ای؛ آن را به‌عنوان برداشت قابل‌اصلاح بیان کن و هیچ واقعیت یا تصمیمی به آن اضافه نکن. وقتی مرحله کامل می‌شود، همین پیام جمع‌بندی کوتاهی از پیشنهاد و گام بازبینی بعدی باشد، نه پرسش.
 
@@ -451,7 +461,10 @@ export async function POST(request: Request) {
               content: JSON.stringify({
                 ...interview,
                 responseLanguage: "Persian",
-                eligibleCoveredSections: interview.remainingSections,
+                eligibleCoveredSections:
+                  interview.stage === "development"
+                    ? []
+                    : interview.remainingSections,
                 sectionFocusTerms: Object.fromEntries(
                   axesForStage(interview.stage).map(({ section, focusTerms }) => [
                     section,

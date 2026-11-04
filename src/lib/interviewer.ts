@@ -226,6 +226,20 @@ export function validateInterviewDecision(
   )
     return false;
 
+  if (
+    request.stage === "development" &&
+    (request.skippedSections.length > 0 ||
+      result.coveredSections.length > 0 ||
+      DEVELOPMENT_AXES.slice(0, request.index).some(
+        (axis) => !request.answeredSections.includes(axis.section),
+      ) ||
+      (result.stageComplete &&
+        !DEVELOPMENT_AXES.every((axis) =>
+          request.answeredSections.includes(axis.section),
+        )))
+  )
+    return false;
+
   const uncoveredSections = request.remainingSections.filter(
     (section) => !result.coveredSections?.includes(section),
   );
@@ -254,6 +268,11 @@ export function validateInterviewDecision(
   const axis = findAxis(result.nextSection, request.stage);
   if (!axis) return false;
   const nextPosition = request.remainingSections.indexOf(result.nextSection);
+  if (
+    request.stage === "development" &&
+    result.nextSection !== request.remainingSections[0]
+  )
+    return false;
   if (
     request.remainingSections
       .slice(0, nextPosition)

@@ -200,4 +200,57 @@ describe("Persian interview questions", () => {
       isValidInterviewQuestion(axis.question, axis, [axis.question]),
     ).toBe(false);
   });
+
+  it("requires every development axis to be answered in order without skips", () => {
+    const axes = DEVELOPMENT_AXES;
+    const request: InterviewRequest = {
+      seed: "بهبود مسیر محله",
+      stage: "development",
+      section: axes[0].section,
+      index: 0,
+      question: axes[0].question,
+      answer: "یک نمونه از مسیر دشوار دیده‌ام.",
+      answeredSections: [axes[0].section],
+      skippedSections: [],
+      remainingSections: axes.slice(1).map((axis) => axis.section),
+      history: [],
+    };
+    const decision = createDemoDecision(request);
+
+    expect(validateInterviewDecision(decision, request)).toBe(true);
+    expect(
+      validateInterviewDecision(
+        {
+          ...decision,
+          coveredSections: [axes[1].section],
+          nextSection: axes[2].section,
+          nextQuestion: axes[2].question,
+        },
+        request,
+      ),
+    ).toBe(false);
+    expect(
+      validateInterviewDecision(
+        {
+          ...decision,
+          nextSection: axes[2].section,
+          nextQuestion: axes[2].question,
+        },
+        request,
+      ),
+    ).toBe(false);
+    expect(
+      validateInterviewDecision(
+        {
+          ...decision,
+          stageComplete: true,
+          coveredSections: request.remainingSections,
+          nextSection: null,
+          nextQuestion: null,
+          questionContext: null,
+        },
+        request,
+      ),
+    ).toBe(false);
+  });
 });

@@ -8,7 +8,6 @@ import {
   BookOpenText,
   Check,
   ChevronDown,
-  ChevronRight,
   CircleHelp,
   Clock3,
   FileText,
@@ -44,8 +43,10 @@ import {
   applyDeadlineTransitions,
   awardToken,
   canCreateIdea,
+  developmentProgressIndex,
   deferSubmission,
   emptyState,
+  hasCompletedDevelopment,
   normalizeState,
   removeIdea,
   SCHEMA_VERSION,
@@ -254,7 +255,7 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
   const index =
     stage === "initial"
       ? (idea.intakeIndex ?? 0)
-      : (idea.developmentIndex ?? 0);
+      : getDevelopmentIndex(idea);
   const list = stage === "initial" ? intakeQuestions : developmentQuestions;
   const axis = list[Math.min(index, list.length - 1)];
   const defaultQuestionContext = questionContextForAxis(axis.section);
@@ -301,8 +302,16 @@ function getQuestion(idea: Idea, stage: "initial" | "development") {
   return base;
 }
 
+function getDevelopmentIndex(idea: Idea) {
+  if (idea.pendingTurn?.stage === "development")
+    return idea.pendingTurn.index;
+  if (idea.editingProgress?.stage === "development")
+    return idea.developmentIndex ?? 0;
+  return developmentProgressIndex(idea);
+}
+
 function getProgress(idea: Idea) {
-  if (idea.status === "submitted") return 100;
+  if (idea.status === "submitted" && hasCompletedDevelopment(idea)) return 100;
   const initial = Math.min(
     new Set([
       ...idea.answers
@@ -321,7 +330,6 @@ function getProgress(idea: Idea) {
           developmentQuestions.some((q) => q.section === answer.section),
         )
         .map((answer) => answer.section),
-      ...(idea.skippedSections?.development ?? []),
     ]).size,
     10,
   );
@@ -655,9 +663,9 @@ export default function Home() {
       if (!turn) {
         const questionData = getQuestion(activeIdea, stage);
         const index =
-      stage === "initial"
-        ? (activeIdea.intakeIndex ?? 0)
-        : (activeIdea.developmentIndex ?? 0);
+          stage === "initial"
+            ? (activeIdea.intakeIndex ?? 0)
+            : getDevelopmentIndex(activeIdea);
         const axes = axesForStage(stage);
         const currentAxis = axes[index];
         if (!currentAxis) {
@@ -722,7 +730,10 @@ export default function Home() {
       const answeredSections = updated.answers
         .filter((answer) => findAxis(answer.section, stage))
         .map((answer) => answer.section);
-      const skippedSections = updated.skippedSections?.[stage] ?? [];
+      const skippedSections =
+        stage === "development"
+          ? []
+          : (updated.skippedSections?.[stage] ?? []);
       const remainingSections = axes
         .slice(turn.index + 1)
         .filter(
@@ -821,7 +832,10 @@ export default function Home() {
           : { developmentIndex: nextIndex }),
         skippedSections: {
           ...updated.skippedSections,
-          [stage]: [...new Set([...skippedSections, ...decision.coveredSections])],
+          [stage]:
+            stage === "development"
+              ? []
+              : [...new Set([...skippedSections, ...decision.coveredSections])],
         },
         mentorNextQuestion: decision.stageComplete
           ? undefined
@@ -886,8 +900,9 @@ export default function Home() {
   function beginDevelopment(idea: Idea) {
     setActiveId(idea.id);
     setDraftAnswer(idea.draftAnswer ?? "");
+    const developmentIndex = getDevelopmentIndex(idea);
     const shouldCreateOpeningQuestion =
-      (idea.developmentIndex ?? 0) === 0 &&
+      developmentIndex === 0 &&
       !idea.answers.some((answer) =>
         developmentQuestions.some((axis) => axis.section === answer.section),
       ) &&
@@ -897,8 +912,18 @@ export default function Home() {
       : null;
     updateIdea({
       ...idea,
-      status: idea.status === "initial" ? "in-development" : idea.status,
+      status:
+        idea.status === "initial" ||
+        (idea.status === "awaiting-confirmation" &&
+          !hasCompletedDevelopment(idea))
+          ? "in-development"
+          : idea.status,
       stage: "development",
+      developmentIndex,
+      ...(idea.status === "awaiting-confirmation" &&
+      !hasCompletedDevelopment(idea)
+        ? { confirmationDeadlineAt: undefined }
+        : {}),
       ...(openingQuestion
         ? {
             mentorNextQuestion: {
@@ -946,14 +971,29 @@ export default function Home() {
   }
 
   function beginReview(idea: Idea) {
+    if (!hasCompletedDevelopment(idea)) {
+      setActiveId(idea.id);
+      setFormError(
+        "برای بازبینی پرونده، ابتدا به هر ده پرسش مرحلهٔ توسعه پاسخ دهید.",
+      );
+      if (
+        idea.status === "initial" &&
+        (idea.intakeIndex ?? 0) < intakeQuestions.length
+      )
+        setScreen("intake");
+      else beginDevelopment(idea);
+      return;
+    }
     const fields = createProposal(idea);
     setReviewDraft({ ...fields, ...idea.proposal });
     setActiveId(idea.id);
-    saveIdeaImmediately({ ...idea, stage: "review" });
+    const savedIdea = saveIdeaImmediately({ ...idea, stage: "review" });
+    if (!savedIdea) return;
     setScreen("review");
   }
 
   function saveProposal(idea: Idea) {
+    if (!hasCompletedDevelopment(idea)) return;
     saveIdeaImmediately({
       ...idea,
       title: reviewDraft.title?.trim().slice(0, 80) || idea.title,
@@ -963,6 +1003,7 @@ export default function Home() {
   }
 
   function updateProposalField(idea: Idea, key: string, value: string) {
+    if (!hasCompletedDevelopment(idea)) return;
     const nextDraft = { ...reviewDraft, [key]: value };
     setReviewDraft(nextDraft);
     saveIdeaImmediately({
@@ -978,6 +1019,10 @@ export default function Home() {
 
   function submitProposal(mode: "now" | "later") {
     if (!activeIdea) return;
+    if (!hasCompletedDevelopment(activeIdea)) {
+      beginReview(activeIdea);
+      return;
+    }
     let saved: Idea = {
       ...activeIdea,
       title: reviewDraft.title?.trim().slice(0, 80) || activeIdea.title,
@@ -1019,16 +1064,24 @@ export default function Home() {
 
   function routeToIdea(idea: Idea) {
     setActiveId(idea.id);
-    if (idea.status === "submitted") setScreen("submitted");
-    else if (idea.status === "awaiting-confirmation") beginReview(idea);
+    if (
+      idea.status === "submitted" &&
+      hasCompletedDevelopment(idea)
+    )
+      setScreen("submitted");
+    else if (
+      idea.status === "awaiting-confirmation" &&
+      hasCompletedDevelopment(idea)
+    )
+      beginReview(idea);
     else if (
       idea.status === "initial" &&
       (idea.intakeIndex ?? 0) < intakeQuestions.length
     )
       setScreen("intake");
-    else if (idea.stage === "review") beginReview(idea);
-    else if ((idea.developmentIndex ?? 0) < developmentQuestions.length)
-      beginDevelopment(idea);
+    else if (idea.stage === "review" && hasCompletedDevelopment(idea))
+      beginReview(idea);
+    else if (!hasCompletedDevelopment(idea)) beginDevelopment(idea);
     else beginReview(idea);
   }
 
@@ -1164,7 +1217,7 @@ export default function Home() {
     screen,
   ]);
 
-  const devIndex = activeIdea?.developmentIndex ?? 0;
+  const devIndex = activeIdea ? getDevelopmentIndex(activeIdea) : 0;
   const pendingAnswer = activeIdea?.pendingTurn
     ? activeIdea.answers.find(
         (answer) => answer.section === activeIdea.pendingTurn?.section,
@@ -1363,13 +1416,41 @@ export default function Home() {
                   aria-describedby="seed-hint seed-error"
                 />
               </div>
+            </div>
+            <div
+              className="landing-choice-actions"
+              role="group"
+              aria-label="انتخاب مسیر ایده"
+            >
               <button
-                className="primary-button composer-action landing-submit"
+                type="button"
+                className="primary-button landing-choice landing-choice-primary"
                 onClick={startIdea}
                 disabled={!seed.trim() || !canCreateIdea(state)}
-                aria-label="شروع پرورش ایده"
               >
-                <ArrowRight size={30} strokeWidth={1.8} aria-hidden="true" />
+                <span className="landing-choice-icon">
+                  <Sprout size={24} strokeWidth={1.8} aria-hidden="true" />
+                </span>
+                <span className="landing-choice-copy">
+                  <b>پرورش ایده</b>
+                  <small>قدم‌به‌قدم، با راهنمایی هوشمند</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="landing-choice landing-choice-secondary"
+                disabled
+                title="ثبت ایده به‌زودی فعال می‌شود."
+              >
+                <span className="landing-choice-icon">
+                  <FileText size={22} strokeWidth={1.8} aria-hidden="true" />
+                </span>
+                <span className="landing-choice-copy">
+                  <b>
+                    ثبت ایده <span className="landing-choice-status">به‌زودی</span>
+                  </b>
+                  <small>ایده‌تان را برای رویداد ثبت کنید</small>
+                </span>
               </button>
             </div>
             <div className="composer-meta landing-composer-meta">
@@ -2278,7 +2359,8 @@ export default function Home() {
                     </details>
                   </div>
                   <div className="idea-actions">
-                    {idea.status === "submitted" ? (
+                    {idea.status === "submitted" &&
+                    hasCompletedDevelopment(idea) ? (
                       <button
                         className="secondary-button"
                         onClick={() => {
@@ -2288,12 +2370,27 @@ export default function Home() {
                       >
                         مشاهدهٔ پیشنهاد <FileText size={16} />
                       </button>
-                    ) : idea.status === "awaiting-confirmation" ? (
+                    ) : idea.status === "submitted" ? (
+                      <button
+                        className="secondary-button"
+                        onClick={() => routeToIdea(idea)}
+                      >
+                        ادامهٔ توسعهٔ ایده <ArrowRight size={16} />
+                      </button>
+                    ) : idea.status === "awaiting-confirmation" &&
+                      hasCompletedDevelopment(idea) ? (
                       <button
                         className="secondary-button"
                         onClick={() => beginReview(idea)}
                       >
                         بازگشت به بازبینی <ArrowRight size={16} />
+                      </button>
+                    ) : idea.status === "awaiting-confirmation" ? (
+                      <button
+                        className="secondary-button"
+                        onClick={() => routeToIdea(idea)}
+                      >
+                        ادامهٔ توسعهٔ ایده <ArrowRight size={16} />
                       </button>
                     ) : (
                       <button
@@ -2304,7 +2401,7 @@ export default function Home() {
                           ? (idea.intakeIndex ?? 0) < 5
                             ? "ادامهٔ ثبت اولیه"
                             : "پرورش بیشتر ایده"
-                          : (idea.developmentIndex ?? 0) < 10
+                          : !hasCompletedDevelopment(idea)
                             ? "ادامهٔ توسعهٔ ایده"
                             : "ادامهٔ مسیر ایده"}
                         <ArrowRight size={16} />
@@ -2528,12 +2625,9 @@ export default function Home() {
                     >
                       ثبت پاسخ <ArrowRight size={18} />
                     </button>
-                    <button
-                      className="text-button proposal-shortcut"
-                      onClick={() => beginReview(activeIdea)}
-                    >
-                      ساخت پیشنهاد بر پایهٔ اطلاعات فعلی <ChevronRight size={15} />
-                    </button>
+                    <p className="review-hint">
+                      پس از پاسخ به هر ده پرسش این مرحله، امکان بازبینی پرونده فعال می‌شود.
+                    </p>
                   </>
                 ) : (
                   <>
@@ -2604,8 +2698,10 @@ export default function Home() {
         </section>
       )}
 
-      {screen === "review" && activeIdea && (
-        <section className="review-view">
+      {screen === "review" &&
+        activeIdea &&
+        hasCompletedDevelopment(activeIdea) && (
+          <section className="review-view">
           <button className="back-link" onClick={() => setScreen("dashboard")}>
             <ArrowLeft size={16} /> ذخیره و خروج
           </button>
@@ -2708,8 +2804,8 @@ export default function Home() {
           <p className="local-limit-note">
             این نسخه پیشنهاد را فقط در همین مرورگر نگه می‌دارد و چیزی برای برگزارکنندگان ارسال نمی‌کند. مهلت ۷۲ ساعته دقیق است؛ چون زمان‌سنجی در پس‌زمینه انجام نمی‌شود، پایان مهلت هنگام بازبودن برنامه یا در بارگذاری بعدی بررسی می‌شود.
           </p>
-        </section>
-      )}
+          </section>
+        )}
 
       {screen === "submitted" && activeIdea && (
         <section className="success-view">

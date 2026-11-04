@@ -597,6 +597,30 @@ describe("adaptive interview route", () => {
       }),
     );
     expect(badBody.status).toBe(400);
+
+    const axes = DEVELOPMENT_AXES;
+    const skippedDevelopmentAxis = await post(
+      requestBody({
+        stage: "development",
+        section: axes[0].section,
+        index: 0,
+        answeredSections: [axes[0].section],
+        skippedSections: [axes[1].section],
+        remainingSections: axes.slice(2).map((axis) => axis.section),
+      }),
+    );
+    expect(skippedDevelopmentAxis.status).toBe(400);
+
+    const missingEarlierDevelopmentAxis = await post(
+      requestBody({
+        stage: "development",
+        section: axes[2].section,
+        index: 2,
+        answeredSections: [axes[0].section, axes[2].section],
+        remainingSections: axes.slice(3).map((axis) => axis.section),
+      }),
+    );
+    expect(missingEarlierDevelopmentAxis.status).toBe(400);
   });
 
   it.each([

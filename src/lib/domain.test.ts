@@ -3,14 +3,17 @@ import {
   applyDeadlineTransitions,
   awardToken,
   canCreateIdea,
+  developmentProgressIndex,
   deferSubmission,
   emptyState,
+  hasCompletedDevelopment,
   normalizeState,
   removeIdea,
   submitNow,
   type Idea,
 } from "./domain";
 import { formatDate } from "./locale";
+import { DEVELOPMENT_AXES } from "./interviewer";
 
 const idea = (overrides: Partial<Idea> = {}): Idea => ({
   id: "idea-1",
@@ -32,6 +35,72 @@ describe("demo domain rules", () => {
       canCreateIdea({
         ...emptyState(),
         ideas: [idea(), idea({ id: "2" }), idea({ id: "3" })],
+      }),
+    ).toBe(false);
+  });
+
+  it("unlocks review only when every development axis has a non-empty answer", () => {
+    for (let count = 0; count < DEVELOPMENT_AXES.length; count += 1) {
+      const partial = idea({
+        answers: DEVELOPMENT_AXES.slice(0, count).map((axis) => ({
+          section: axis.section,
+          question: axis.question,
+          answer: "پاسخ",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        })),
+        developmentIndex: DEVELOPMENT_AXES.length,
+      });
+
+      expect(hasCompletedDevelopment(partial)).toBe(false);
+      expect(developmentProgressIndex(partial)).toBe(count);
+    }
+
+    const legacyWithGap = idea({
+      answers: [DEVELOPMENT_AXES[0], DEVELOPMENT_AXES[2]].map((axis) => ({
+        section: axis.section,
+        question: axis.question,
+        answer: "پاسخ ذخیره‌شده",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })),
+      developmentIndex: DEVELOPMENT_AXES.length,
+    });
+    expect(developmentProgressIndex(legacyWithGap)).toBe(1);
+    expect(hasCompletedDevelopment(legacyWithGap)).toBe(false);
+    expect(legacyWithGap.answers).toHaveLength(2);
+
+    expect(
+      hasCompletedDevelopment(
+        idea({
+          answers: [
+            {
+              section: "The problem",
+              question: "پرسش ثبت اولیه",
+              answer: "پاسخ ثبت اولیه",
+              createdAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+
+    const complete = idea({
+      answers: DEVELOPMENT_AXES.map((axis) => ({
+        section: axis.section,
+        question: axis.question,
+        answer: "هنوز مطمئن نیستم.",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })),
+    });
+    expect(hasCompletedDevelopment(complete)).toBe(true);
+    expect(developmentProgressIndex(complete)).toBe(DEVELOPMENT_AXES.length);
+    expect(
+      hasCompletedDevelopment({
+        ...complete,
+        answers: complete.answers.map((answer) =>
+          answer.section === DEVELOPMENT_AXES[5].section
+            ? { ...answer, answer: "   " }
+            : answer,
+        ),
       }),
     ).toBe(false);
   });
