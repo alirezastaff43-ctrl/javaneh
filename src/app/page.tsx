@@ -2,6 +2,7 @@
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import StructuredRegistrationForm from "./structured-registration-form";
+import SpeechInputControl from "./speech-input-control";
 import {
   ArrowLeft,
   ArrowRight,
@@ -84,6 +85,7 @@ import {
 
 type Screen =
   | "home"
+  | "idea-mentor"
   | "structured"
   | "details"
   | "verify"
@@ -97,6 +99,27 @@ type MentorChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
+type IdeaMentorStage =
+  | "conversation"
+  | "write-idea"
+  | "confirm-registration"
+  | "not-now";
+function isIdeaMentorStage(stage: string | null): stage is IdeaMentorStage {
+  return (
+    stage === "conversation" ||
+    stage === "write-idea" ||
+    stage === "confirm-registration" ||
+    stage === "not-now"
+  );
+}
+function hasExplicitRegistrationConsent(message: string) {
+  const normalized = message.replace(/\s+/gu, " ").trim();
+  if (/نه|فعلاً|فعلا|شاید|مطمئن نیستم|بعداً|بعدا|بیشتر گفت‌وگو|بیشتر گفتگو/u.test(normalized))
+    return false;
+  return /^(?:بله|آره|اره|حتماً|حتما|باشه|موافقم)(?:\s|،|؛|$)|^(?:ثبتش کن|ایده(?:‌| )ام را ثبت|ایده(?:‌| )ام رو ثبت|می(?:‌| )خواهم ثبت|می(?:‌| )خوام ثبت)/u.test(
+    normalized,
+  );
+}
 const labels = {
   statuses: {
     initial: "تازه‌شروع‌شده",
@@ -262,6 +285,12 @@ function displayIntakeSummary(idea: Idea) {
   return `${idea.seed}\n\n${formattedAnswers}`;
 }
 
+function hasUnfinishedStructuredRegistration(registration: StructuredRegistration) {
+  return registration.status === "draft" ||
+    registration.activeFlow === "F" ||
+    Object.values(registration.workbooks).some((workbook) => workbook.status !== "submitted");
+}
+
 function makeId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -383,6 +412,7 @@ export default function Home() {
   const [registrations, setRegistrations] = useState<StructuredRegistration[]>([]);
   const registrationsRef = useRef(registrations);
   const [activeRegistration, setActiveRegistration] = useState<StructuredRegistration | null>(null);
+  const structuredReturnScreenRef = useRef<Screen>("home");
   function commitState(
     updater: AppState | ((current: AppState) => AppState),
   ) {
@@ -414,7 +444,18 @@ export default function Home() {
   }
 
   function submitRegistration(updated: StructuredRegistration): boolean {
-    const nextRecords = registrationsRef.current.map((item) => item.id === updated.id ? updated : item);
+    const submitted = {
+      ...updated,
+      status: "submitted" as const,
+      activeFlow: "dashboard" as const,
+      workbooks: {
+        ...updated.workbooks,
+        C: updated.workbooks.C.status === "locked"
+          ? { ...updated.workbooks.C, status: "available" as const }
+          : updated.workbooks.C,
+      },
+    };
+    const nextRecords = registrationsRef.current.map((item) => item.id === submitted.id ? submitted : item);
     try {
       localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
     } catch {
@@ -424,15 +465,22 @@ export default function Home() {
       return false;
     }
     commitRegistrations(nextRecords);
-    setActiveRegistration(updated);
+    setActiveRegistration(submitted);
     setStorageError("");
     return true;
   }
 
-  function startStructuredRegistration() {
-    const existingDraft = registrationsRef.current.find((item) => item.status === "draft");
-    if (existingDraft) {
-      setActiveRegistration(existingDraft);
+  function startStructuredRegistration(initialIdea = "") {
+    structuredReturnScreenRef.current = "home";
+    const existing = initialIdea
+      ? undefined
+      : registrationsRef.current.find(hasUnfinishedStructuredRegistration);
+    if (existing) {
+      setActiveRegistration(
+        existing.status === "submitted" && existing.activeFlow !== "F"
+          ? { ...existing, activeFlow: "dashboard" }
+          : existing,
+      );
       setFormError("");
       setScreen("structured");
       return;
@@ -441,7 +489,13 @@ export default function Home() {
       setFormError("به سقف سه ثبت در این مرورگر رسیده‌اید. ثبت‌های ذخیره‌شده همچنان در دسترس‌اند.");
       return;
     }
-    const draft = createStructuredDraft();
+    const created = createStructuredDraft();
+    const draft = initialIdea.trim()
+      ? {
+          ...created,
+          data: { ...created.data, problem: initialIdea.trim() },
+        }
+      : created;
     const nextRecords = [...registrationsRef.current, draft];
     commitRegistrations(nextRecords);
     setActiveRegistration(draft);
@@ -456,9 +510,59 @@ export default function Home() {
     }
     setScreen("structured");
   }
+
+  function openStructuredRegistration(registration: StructuredRegistration) {
+    structuredReturnScreenRef.current = "dashboard";
+    setActiveRegistration(registration);
+    setScreen("structured");
+  }
   const [ready, setReady] = useState(false);
   const [screen, setScreen] = useState<Screen>("home");
+  const signupDestinationRef = useRef<"intake" | "idea-mentor" | null>(null);
+  const [infoDialog, setInfoDialog] = useState<"mentor" | "about" | null>(null);
+  const infoDialogTriggerRef = useRef<HTMLButtonElement>(null);
+  const infoDialogRef = useRef<HTMLElement>(null);
+  const infoDialogCloseRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!infoDialog) return;
+    const trigger = infoDialogTriggerRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusFrame = window.requestAnimationFrame(() =>
+      infoDialogCloseRef.current?.focus(),
+    );
+    function handleDialogKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setInfoDialog(null);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = infoDialogRef.current?.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), a[href], [tabindex]:not([tabindex='-1'])",
+      );
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", handleDialogKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleDialogKeyDown);
+      trigger?.focus();
+    };
+  }, [infoDialog]);
   const [seed, setSeed] = useState("");
+  const [seedSpeechBusy, setSeedSpeechBusy] = useState(false);
+  const seedInputRef = useRef<HTMLTextAreaElement>(null);
   const [formError, setFormError] = useState("");
   const [seedEditOpen, setSeedEditOpen] = useState(false);
   const [seedEditDraft, setSeedEditDraft] = useState("");
@@ -492,6 +596,16 @@ export default function Home() {
   const mentorChatBusyRef = useRef(false);
   const mentorChatEndRef = useRef<HTMLDivElement>(null);
   const mentorChatInputRef = useRef<HTMLTextAreaElement>(null);
+  const [ideaMentorMessages, setIdeaMentorMessages] = useState<MentorChatMessage[]>([]);
+  const [ideaMentorStage, setIdeaMentorStage] = useState<IdeaMentorStage>("conversation");
+  const [ideaMentorIdea, setIdeaMentorIdea] = useState("");
+  const [ideaMentorReassuranceOffered, setIdeaMentorReassuranceOffered] = useState(false);
+  const [ideaMentorDraft, setIdeaMentorDraft] = useState("");
+  const [ideaMentorBusy, setIdeaMentorBusy] = useState(false);
+  const [ideaMentorError, setIdeaMentorError] = useState("");
+  const ideaMentorBusyRef = useRef(false);
+  const ideaMentorEndRef = useRef<HTMLDivElement>(null);
+  const ideaMentorInputRef = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState(false);
   const [moderationBusy, setModerationBusy] = useState(false);
   const [openingBusy, setOpeningBusy] = useState(false);
@@ -577,6 +691,10 @@ export default function Home() {
   useEffect(() => {
     mentorChatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [mentorChatMessages, mentorChatBusy]);
+
+  useEffect(() => {
+    ideaMentorEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [ideaMentorMessages, ideaMentorBusy]);
 
   useEffect(() => {
     if (!mentorChatOpen) return;
@@ -705,6 +823,38 @@ export default function Home() {
     setFormError("");
   }
 
+  function deleteStructuredRegistration(
+    registration: StructuredRegistration,
+    title: string,
+  ) {
+    if (
+      !window.confirm(
+        `از حذف «${title}» و همهٔ پاسخ‌های ذخیره‌شدهٔ آن مطمئن هستید؟`,
+      )
+    )
+      return;
+
+    const nextRecords = registrationsRef.current.filter(
+      (item) => item.id !== registration.id,
+    );
+    try {
+      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
+    } catch {
+      setFormError("ثبت از مرورگر حذف نشد. فضای ذخیره‌سازی را بررسی و دوباره تلاش کنید.");
+      setStorageError(
+        "ذخیره‌سازی مرورگر با خطا روبه‌رو شد. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
+      );
+      return;
+    }
+
+    commitRegistrations(nextRecords);
+    if (activeRegistration?.id === registration.id) {
+      setActiveRegistration(null);
+      setScreen("dashboard");
+    }
+    setFormError("");
+  }
+
   async function startIdea() {
     if (!seed.trim()) {
       setFormError("برای ادامه، چند کلمه دربارهٔ مسئله یا ایده‌تان بنویسید.");
@@ -729,6 +879,7 @@ export default function Home() {
         return;
       }
       if (state.profile?.verified) {
+        signupDestinationRef.current = null;
         const idea = newIdea(seed.trim());
         commitState((current) => ({ ...current, ideas: [...current.ideas, idea] }));
         setActiveId(idea.id);
@@ -740,6 +891,7 @@ export default function Home() {
         );
         setScreen("intake");
       } else {
+        signupDestinationRef.current = "intake";
         setScreen("details");
       }
     } catch {
@@ -747,6 +899,25 @@ export default function Home() {
     } finally {
       setModerationBusy(false);
     }
+  }
+
+  function appendSeedTranscript(transcript: string) {
+    const currentText = seedInputRef.current?.value ?? seed;
+    const current = currentText.trim();
+    const separator = current ? "\n" : "";
+    const remaining = Math.max(0, 600 - current.length - separator.length);
+    const addition = transcript.trim();
+    const nextSeed = `${current}${separator}${addition.slice(0, remaining)}`;
+    setSeed(nextSeed);
+    setFormError(remaining < addition.length ? "بخشی از متن گفتار به سقف ۶۰۰ نویسه رسید؛ متن را بازبینی کنید." : "");
+    requestAnimationFrame(() => {
+      const textarea = seedInputRef.current;
+      if (!textarea) return;
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 240)}px`;
+      textarea.style.overflowY = textarea.scrollHeight > 240 ? "auto" : "hidden";
+      textarea.setSelectionRange(nextSeed.length, nextSeed.length);
+    });
   }
 
   function submitDetails(event: React.FormEvent<HTMLFormElement>) {
@@ -778,6 +949,25 @@ export default function Home() {
       setFormError("برای ادامه، عددی ۴ تا ۸ رقمی وارد کنید.");
       return;
     }
+    if (signupDestinationRef.current === "idea-mentor") {
+      signupDestinationRef.current = null;
+      commitState((current) => ({
+        ...current,
+        schemaVersion: SCHEMA_VERSION,
+        profile: {
+          name: `${firstName.trim()} ${lastName.trim()}`,
+          verified: true,
+        },
+      }));
+      setNationalId("");
+      setMobile("");
+      setMaskedMobile("");
+      setCode("");
+      setFormError("");
+      startIdeaMentor();
+      return;
+    }
+    signupDestinationRef.current = null;
     const idea = newIdea(seed);
     commitState((current) => ({
       ...current,
@@ -1392,12 +1582,146 @@ export default function Home() {
     }
   }
 
-  const totalIdeas = state.ideas.length;
-  const activeIdeas = state.ideas.filter((idea) => idea.status !== "submitted");
-  const averageProgress = totalIdeas
+  async function sendIdeaMentorMessage(
+    message: string,
+    history = ideaMentorMessages,
+  ) {
+    const content = message.trim();
+    if (!content || ideaMentorBusyRef.current || ideaMentorStage === "not-now") return;
+    ideaMentorBusyRef.current = true;
+    setIdeaMentorBusy(true);
+    setIdeaMentorError("");
+    const messages = [...history, { role: "user" as const, content }];
+    setIdeaMentorMessages(messages);
+
+    try {
+      const response = await fetch("/api/mentor/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          purpose: "idea-registration",
+          messages: messages.slice(-12),
+          ideas: [],
+        }),
+      });
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new Error("پاسخ منتور خوانده نشد؛ کمی بعد دوباره تلاش کن.");
+      }
+      const reply =
+        payload &&
+        typeof payload === "object" &&
+        "reply" in payload &&
+        typeof payload.reply === "string"
+          ? payload.reply
+          : null;
+      const stage =
+        payload &&
+        typeof payload === "object" &&
+        "stage" in payload &&
+        typeof payload.stage === "string"
+          ? payload.stage
+          : null;
+      const idea =
+        payload &&
+        typeof payload === "object" &&
+        "idea" in payload &&
+        typeof payload.idea === "string"
+          ? payload.idea
+          : "";
+      if (
+        !response.ok ||
+        reply === null ||
+        !["conversation", "write-idea", "confirm-registration", "not-now", "register"].includes(stage ?? "")
+      ) {
+        const error =
+          payload &&
+          typeof payload === "object" &&
+          "error" in payload &&
+          typeof payload.error === "string"
+            ? payload.error
+            : "پاسخ منتور آماده نشد؛ کمی بعد دوباره تلاش کن.";
+        throw new Error(error);
+      }
+
+      if (
+        stage === "register" &&
+        (!history.length ||
+          ideaMentorStage !== "confirm-registration" ||
+          !(idea || ideaMentorIdea) ||
+          !hasExplicitRegistrationConsent(content))
+      ) {
+        throw new Error(
+          "اگر مطمئنی که می‌خواهی ایده‌ات را ثبت کنی، روشن بگو؛ در غیر این صورت می‌توانیم بیشتر گفت‌وگو کنیم.",
+        );
+      }
+
+      if (idea) setIdeaMentorIdea(idea);
+      if (stage === "register") {
+        startStructuredRegistration(idea || ideaMentorIdea || content);
+        return;
+      }
+      if (!isIdeaMentorStage(stage))
+        throw new Error("پاسخ منتور آماده نشد؛ کمی بعد دوباره تلاش کن.");
+      if (
+        stage === "confirm-registration" &&
+        ideaMentorStage === "confirm-registration" &&
+        /مطمئن\s*نیستم|گفت‌وگو|گفتگو/u.test(content)
+      )
+        setIdeaMentorReassuranceOffered(true);
+      setIdeaMentorStage(stage);
+      setIdeaMentorMessages((current) => [
+        ...current,
+        { role: "assistant", content: reply },
+      ]);
+      setIdeaMentorDraft("");
+    } catch (error) {
+      setIdeaMentorError(
+        error instanceof Error
+          ? error.message
+          : "ارتباط با منتور برقرار نشد؛ دوباره تلاش کن.",
+      );
+    } finally {
+      ideaMentorBusyRef.current = false;
+      setIdeaMentorBusy(false);
+    }
+  }
+
+  function startIdeaMentor() {
+    const initialMessage = seed.trim();
+    if (!initialMessage) {
+      setFormError("برای شروع، چیزی از ایده یا چیزی که ذهنت را مشغول کرده بنویس.");
+      return;
+    }
+    if (!canCreateIdea(stateRef.current, registrationsRef.current.length)) {
+      setFormError("به سقف سه ثبت در این مرورگر رسیده‌اید. ثبت‌های ذخیره‌شده همچنان در دسترس‌اند.");
+      return;
+    }
+    setFormError("");
+    if (!stateRef.current.profile?.verified) {
+      signupDestinationRef.current = "idea-mentor";
+      setScreen("details");
+      return;
+    }
+    signupDestinationRef.current = null;
+    setIdeaMentorMessages([]);
+    setIdeaMentorStage("conversation");
+    setIdeaMentorIdea("");
+    setIdeaMentorReassuranceOffered(false);
+    setIdeaMentorDraft("");
+    setScreen("idea-mentor");
+    void sendIdeaMentorMessage(initialMessage, []);
+  }
+
+  const totalIdeas = state.ideas.length + registrations.length;
+  const activeIdeas = state.ideas.filter((idea) => idea.status !== "submitted").length +
+    registrations.filter(hasUnfinishedStructuredRegistration).length;
+  const averageProgress = state.ideas.length
     ? Math.round(
         state.ideas.reduce((sum, idea) => sum + getProgress(idea), 0) /
-          totalIdeas,
+          state.ideas.length,
       )
     : 0;
   const profileInitials =
@@ -1562,7 +1886,7 @@ export default function Home() {
 
   return (
     <main
-      className={`app-shell${screen === "home" ? " landing-shell" : screen === "intake" ? " intake-shell" : screen === "dashboard" ? " dashboard-shell" : ["details", "verify", "develop", "review", "submitted", "initial-confirmed", "structured"].includes(screen) ? " glass-shell" : ""}`}
+      className={`app-shell${screen === "home" ? " landing-shell" : screen === "intake" ? " intake-shell" : screen === "dashboard" ? " dashboard-shell" : screen === "idea-mentor" ? " idea-mentor-shell" : ["details", "verify", "develop", "review", "submitted", "initial-confirmed", "structured"].includes(screen) ? " glass-shell" : ""}`}
     >
       <header
         className={`topbar${screen === "home" || screen === "intake" ? " landing-topbar" : ""}`}
@@ -1592,17 +1916,32 @@ export default function Home() {
                 className={screen === "home" ? "is-active" : ""}
                 href={screen === "home" ? "#about" : "#intake-stage"}
               >
-                دربارهٔ رویداد
+                رویداد
               </a>
-              <a
-                className={screen === "intake" ? "is-active" : ""}
-                href={screen === "home" ? "#how-it-works" : "#intake-conversation"}
+              <button
+                type="button"
+                className={`landing-nav-button${screen === "intake" ? " is-active" : ""}`}
+                aria-haspopup="dialog"
+                aria-expanded={infoDialog === "mentor"}
+                onClick={(event) => {
+                  infoDialogTriggerRef.current = event.currentTarget;
+                  setInfoDialog("mentor");
+                }}
               >
-                روند کار
-              </a>
-              <a href={screen === "home" ? "#benefits" : "#intake-tokens"}>
-                دستاوردها
-              </a>
+                منتور هوشمند
+              </button>
+              <button
+                type="button"
+                className="landing-nav-button"
+                aria-haspopup="dialog"
+                aria-expanded={infoDialog === "about"}
+                onClick={(event) => {
+                  infoDialogTriggerRef.current = event.currentTarget;
+                  setInfoDialog("about");
+                }}
+              >
+                درباره ما
+              </button>
               <a href={screen === "home" ? "#faq" : "#intake-faq"}>پرسش‌های متداول</a>
             </nav>
             <div className="landing-actions">
@@ -1641,6 +1980,359 @@ export default function Home() {
           </div>
         )}
       </header>
+
+      {infoDialog === "mentor" && (
+        <div
+          className="research-dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setInfoDialog(null);
+          }}
+        >
+          <section
+            ref={infoDialogRef}
+            className="research-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="research-dialog-title"
+            aria-describedby="research-dialog-intro"
+            dir="rtl"
+          >
+            <header className="research-dialog-header">
+              <div className="research-dialog-brand">
+                <span className="research-dialog-brand-icon" aria-hidden="true">
+                  <BookOpenText size={18} />
+                </span>
+                <span>یادداشت پژوهشی منتور جوانه</span>
+              </div>
+              <button
+                ref={infoDialogCloseRef}
+                type="button"
+                className="research-dialog-close"
+                aria-label="بستن پشتوانهٔ علمی"
+                onClick={() => setInfoDialog(null)}
+              >
+                <X size={19} aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="research-dialog-content">
+              <section className="research-hero">
+                <div className="research-hero-copy">
+                  <p className="research-eyebrow">از پژوهش تا همراهی در مسیر ایده</p>
+                  <h1 id="research-dialog-title">
+                    پشتوانهٔ علمی و پژوهشی
+                    <span>منتور هوشمند جوانه</span>
+                  </h1>
+                  <p id="research-dialog-intro" className="research-hero-intro">
+                    چارچوب این همراه هوشمند از تلفیق یافته‌های پژوهشی در منتورینگ،
+                    تسهیلگری نوآوری، تفکر طراحی، کارآفرینی اجتماعی و توسعهٔ شایستگی‌های
+                    نوآوری اجتماعی شکل گرفته است.
+                  </p>
+                </div>
+                <div className="research-hero-index" aria-label="شش پژوهش علمی">
+                  <span className="research-index-number">۰۶</span>
+                  <span>پژوهش بین‌المللی</span>
+                  <i aria-hidden="true" />
+                  <small>یک چارچوب برای پرورش ایده</small>
+                </div>
+              </section>
+
+              <div className="research-principles" aria-label="اصول همراهی منتور">
+                <div className="research-principle">
+                  <span>۰۱</span>
+                  <b>پرسشگری هدفمند</b>
+                  <small>روشن‌کردن مسئله و نیاز</small>
+                </div>
+                <div className="research-principle">
+                  <span>۰۲</span>
+                  <b>بازتعریف مسئله</b>
+                  <small>دیدن پیوندها و ظرفیت‌ها</small>
+                </div>
+                <div className="research-principle">
+                  <span>۰۳</span>
+                  <b>همراهی متناسب</b>
+                  <small>هماهنگ با بلوغ هر ایده</small>
+                </div>
+              </div>
+
+              <section className="research-story" aria-labelledby="research-approach-title">
+                <div className="research-section-heading">
+                  <span className="research-section-mark" aria-hidden="true"><Sprout size={19} /></span>
+                  <div>
+                    <span>رویکرد طراحی</span>
+                    <h2 id="research-approach-title">منتور، تسهیلگر رشد ایده است</h2>
+                  </div>
+                </div>
+                <p>
+                  منتور هوشمند جوانه صرفاً ابزار پرسش‌وپاسخ یا ثبت اطلاعات نیست؛
+                  نقش آن تسهیلگری هوشمند برای توسعهٔ ایده است. با تکیه بر گوش‌دادن
+                  فعال، تفکر انتقادی و سیستمی، پرسشگری هدفمند و شناسایی ظرفیت‌های
+                  پنهان، تلاش می‌کند افراد را در تبدیل دغدغه‌ها و ایده‌های اولیه به
+                  راه‌حل‌های اجتماعی منسجم همراهی کند.
+                </p>
+                <p>
+                  مسیر گفت‌وگو با توجه به تفاوت تجربهٔ افراد و میزان شکل‌گرفتن هر ایده
+                  تنظیم می‌شود. هدف، فراتر رفتن از جمع‌آوری ایده‌ها و فراهم‌کردن
+                  فرصتی برای یادگیری، کشف، تفکر خلاق و پرورش آن‌هاست؛ فرد مشارکت‌کنندهٔ
+                  اصلی در شکل‌گیری و تکامل ایدهٔ خود باقی می‌ماند.
+                </p>
+              </section>
+
+              <section className="research-sources" aria-labelledby="research-sources-title">
+                <div className="research-section-heading research-sources-heading">
+                  <span className="research-section-mark research-section-mark-warm" aria-hidden="true">
+                    <FileText size={18} />
+                  </span>
+                  <div>
+                    <span>مطالعات مرجع</span>
+                    <h2 id="research-sources-title">شش پژوهش در شکل‌گیری چارچوب</h2>
+                  </div>
+                  <small>منابع علمی و پژوهشی</small>
+                </div>
+                <div className="research-source-list">
+                  <article className="research-source">
+                    <span className="research-source-number">۰۱</span>
+                    <div className="research-source-copy">
+                      <h3>Development of a Competency Model for Facilitators in Design Thinking (2020)</h3>
+                      <p>توسعهٔ مدل شایستگی برای تسهیلگران تفکر طراحی؛ پژوهشی دربارهٔ شناسایی و اولویت‌بندی مهارت‌ها و شایستگی‌های تسهیلگران حرفه‌ای.</p>
+                      <a href="https://doi.org/10.22251/jlcci.2020.20.17.449" target="_blank" rel="noreferrer">
+                        مشاهدهٔ مقاله و دسترسی به متن <ArrowUpRight size={15} aria-hidden="true" />
+                      </a>
+                    </div>
+                  </article>
+                  <article className="research-source">
+                    <span className="research-source-number">۰۲</span>
+                    <div className="research-source-copy">
+                      <h3>Design Facilitation: A Critical Review of Conceptualisations and Constructs (2021)</h3>
+                      <p>تسهیلگری طراحی: مرور انتقادی مفاهیم و سازه‌های نظری؛ مروری بر ۱۰۲ اثر پژوهشی برای تبیین ماهیت و مؤلفه‌های تسهیلگری طراحی.</p>
+                      <a href="https://doi.org/10.1016/j.tsc.2021.100962" target="_blank" rel="noreferrer">
+                        مشاهدهٔ مقاله <ArrowUpRight size={15} aria-hidden="true" />
+                      </a>
+                    </div>
+                  </article>
+                  <article className="research-source">
+                    <span className="research-source-number">۰۳</span>
+                    <div className="research-source-copy">
+                      <h3>Taxonomy of Design Thinking Facilitation (2021)</h3>
+                      <p>گونه‌شناسی تسهیلگری تفکر طراحی؛ پژوهشی دربارهٔ رویکردهای تسهیلگری و نقش مشارکت و همراهی در فرایند توسعهٔ نوآوری.</p>
+                      <a href="https://findresearcher.sdu.dk/ws/files/189850446/caim.12451.pdf" target="_blank" rel="noreferrer">
+                        دسترسی به نسخهٔ PDF مقاله <ArrowUpRight size={15} aria-hidden="true" />
+                      </a>
+                    </div>
+                  </article>
+                  <article className="research-source">
+                    <span className="research-source-number">۰۴</span>
+                    <div className="research-source-copy">
+                      <h3>Enhancing Entrepreneurial Learning Through Mentoring: A Situational and Generic Mentor Role Taxonomy (2021)</h3>
+                      <p>تقویت یادگیری کارآفرینانه از طریق منتورینگ؛ پژوهشی دربارهٔ نقش‌های متنوع منتور و ضرورت تطبیق شیوهٔ همراهی با نیازهای یادگیری افراد.</p>
+                      <a href="https://doi.org/10.1108/JSBED-11-2019-0356" target="_blank" rel="noreferrer">
+                        مشاهدهٔ مقاله <ArrowUpRight size={15} aria-hidden="true" />
+                      </a>
+                    </div>
+                  </article>
+                  <article className="research-source">
+                    <span className="research-source-number">۰۵</span>
+                    <div className="research-source-copy">
+                      <h3>Social Entrepreneurship Education: A Conceptual Framework and Review (2021)</h3>
+                      <p>آموزش کارآفرینی اجتماعی: چارچوب مفهومی و مرور پژوهش‌ها دربارهٔ توسعهٔ دانش، مهارت‌ها و شایستگی‌های موردنیاز.</p>
+                      <a href="https://doi.org/10.1016/j.ijme.2021.100533" target="_blank" rel="noreferrer">
+                        مشاهدهٔ مقاله <ArrowUpRight size={15} aria-hidden="true" />
+                      </a>
+                    </div>
+                  </article>
+                  <article className="research-source">
+                    <span className="research-source-number">۰۶</span>
+                    <div className="research-source-copy">
+                      <h3>Exploring Team Roles for Social Innovation Labs: Toward a Competence-Based Role Self-Assessment Approach (2024)</h3>
+                      <p>بررسی نقش‌های تیمی در آزمایشگاه‌های نوآوری اجتماعی؛ پژوهشی دربارهٔ شایستگی‌های تسهیلگر، سازنده، آینده‌نگر و مدیر در تیم‌های نوآوری اجتماعی.</p>
+                      <a href="https://doi.org/10.1016/j.jengtecman.2024.101799" target="_blank" rel="noreferrer">
+                        مشاهده و دریافت متن مقالهٔ دسترسی‌آزاد <ArrowUpRight size={15} aria-hidden="true" />
+                      </a>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <p className="research-dialog-footer">
+                جوانه می‌کوشد بستری فراهم کند تا دغدغه‌ها و ایده‌های اولیه نیز فرصت
+                بررسی، توسعه و تبدیل‌شدن به راه‌حل‌هایی با ارزش اجتماعی را پیدا کنند.
+              </p>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {infoDialog === "about" && (
+        <div
+          className="research-dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setInfoDialog(null);
+          }}
+        >
+          <section
+            ref={infoDialogRef}
+            className="research-dialog about-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="about-dialog-title"
+            aria-describedby="about-dialog-intro"
+            dir="rtl"
+          >
+            <header className="research-dialog-header">
+              <div className="research-dialog-brand">
+                <span className="research-dialog-brand-icon" aria-hidden="true">
+                  <Flower2 size={19} />
+                </span>
+                <span>رویداد ملی نوآوری اجتماعی جوانه</span>
+              </div>
+              <button
+                ref={infoDialogCloseRef}
+                type="button"
+                className="research-dialog-close"
+                aria-label="بستن دربارهٔ ما"
+                onClick={() => setInfoDialog(null)}
+              >
+                <X size={19} aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="research-dialog-content about-dialog-content">
+              <section className="about-hero">
+                <div className="about-hero-copy">
+                  <p className="research-eyebrow">از یک مسئلهٔ مشترک تا راه‌حل‌های برخاسته از جامعه</p>
+                  <h1 id="about-dialog-title">
+                    وقتی مردم دست‌به‌کار می‌شوند،
+                    <span>راه‌های تازه جوانه می‌زنند.</span>
+                  </h1>
+                  <p id="about-dialog-intro" className="research-hero-intro">
+                    صندوق فناوری‌ها و نوآوری‌های اجتماعی جوانه، رویداد ملی نوآوری اجتماعی
+                    جوانه را برای شناسایی و گردآوری ایده‌ها و راه‌حل‌های نوآورانه دربارهٔ
+                    مسائل اولویت‌دار کشور طراحی کرده است؛ بستری برای دیده‌شدن ظرفیت مردم
+                    در پاسخ‌دادن به مسئله‌های جامعه.
+                  </p>
+                </div>
+                <div className="about-journey" aria-hidden="true">
+                  <span className="about-journey-label">از مسئله</span>
+                  <span className="about-journey-stem" />
+                  <span className="about-journey-mark"><Sprout size={24} /></span>
+                  <span className="about-journey-stem" />
+                  <span className="about-journey-label">تا کنش جمعی</span>
+                </div>
+              </section>
+
+              <section className="about-question" aria-labelledby="about-question-title">
+                <div className="research-section-heading">
+                  <span className="research-section-mark research-section-mark-warm" aria-hidden="true">
+                    <Lightbulb size={19} />
+                  </span>
+                  <div>
+                    <span>پرسش محوری دورهٔ نخست</span>
+                    <h2 id="about-question-title">یک پرسش، هزار امکان برای پاسخ</h2>
+                  </div>
+                </div>
+                <blockquote>
+                  چه ایده‌ها و راه‌حل‌های نوآورانه‌ای می‌توانند ظرفیت مردم را برای کنش
+                  مؤثر، جمعی و پایدار در مواجهه با جنگ اقتصادی فعال کنند؟
+                </blockquote>
+                <p>
+                  این پرسش، چارچوب موضوعی نخستین دوره است؛ راه‌حل‌ها می‌توانند از دل
+                  تجربه‌های محلی، همکاری‌های مردمی و نگاه‌های تازه به یک مسئله شکل بگیرند.
+                </p>
+              </section>
+
+              <section className="about-approach" aria-labelledby="about-approach-title">
+                <div className="research-section-heading">
+                  <span className="research-section-mark" aria-hidden="true">
+                    <Users size={19} />
+                  </span>
+                  <div>
+                    <span>نگاه جوانه</span>
+                    <h2 id="about-approach-title">نوآوری اجتماعی، فقط یک فناوری یا کسب‌وکار تازه نیست</h2>
+                  </div>
+                </div>
+                <p>
+                  پاسخ نوآورانه می‌تواند الگویی برای مشارکت و یاریگری، مداخله‌ای رفتاری،
+                  ابتکاری فرهنگی یا رسانه‌ای، سازوکاری برای همکاری یا مدلی اجتماعی و
+                  اقتصادی باشد. نقطهٔ آغاز، فهم مسئله و فعال‌کردن ظرفیت‌های واقعی مردم است.
+                </p>
+                <div className="about-audience-line">
+                  <span>این میدان برای</span>
+                  <b>صاحبان ایده</b>
+                  <i />
+                  <b>گروه‌های مردمی</b>
+                  <i />
+                  <b>متخصصان و دانشگاهیان</b>
+                  <i />
+                  <b>فعالان اجتماعی</b>
+                  <span>گشوده است.</span>
+                </div>
+              </section>
+
+              <section className="about-themes" aria-labelledby="about-themes-title">
+                <div className="research-section-heading about-themes-heading">
+                  <span className="research-section-mark" aria-hidden="true">
+                    <Flower2 size={19} />
+                  </span>
+                  <div>
+                    <span>شش پنجره به یک مسئلهٔ ملی</span>
+                    <h2 id="about-themes-title">محورهای نوآوری در دورهٔ نخست</h2>
+                  </div>
+                  <small>ایده‌های بین‌محوری هم جا دارند</small>
+                </div>
+                <div className="about-theme-list">
+                  <article className="about-theme">
+                    <span>۰۱</span>
+                    <div>
+                      <h3>مصرف هوشمند، اتلاف کمتر</h3>
+                      <p>مشارکت مردم برای مدیریت پایدار مصرف انرژی، آب، غذا و دیگر منابع.</p>
+                    </div>
+                  </article>
+                  <article className="about-theme">
+                    <span>۰۲</span>
+                    <div>
+                      <h3>فرهنگ حمایت از تولید داخلی</h3>
+                      <p>الگوهای اجتماعی و فرهنگی برای حمایت آگاهانه و پایدار از تولید.</p>
+                    </div>
+                  </article>
+                  <article className="about-theme">
+                    <span>۰۳</span>
+                    <div>
+                      <h3>یاریگری و همکاری اقتصادی</h3>
+                      <p>به‌اشتراک‌گذاری منابع، مهارت‌ها و توان جمعی برای پاسخ به نیازها.</p>
+                    </div>
+                  </article>
+                  <article className="about-theme">
+                    <span>۰۴</span>
+                    <div>
+                      <h3>تاب‌آوری اجتماعی</h3>
+                      <p>تقویت پیوند، اعتماد و حمایت متقابل در برابر فشارهای اقتصادی.</p>
+                    </div>
+                  </article>
+                  <article className="about-theme">
+                    <span>۰۵</span>
+                    <div>
+                      <h3>روایت و بسیج اجتماعی</h3>
+                      <p>ارتباطات و ابتکارهای رسانه‌ای برای آگاهی و کنش هدفمند و پایدار.</p>
+                    </div>
+                  </article>
+                  <article className="about-theme">
+                    <span>۰۶</span>
+                    <div>
+                      <h3>توانمندسازی اقشار آسیب‌پذیر</h3>
+                      <p>راه‌حل‌هایی برای افزایش عاملیت و توان مواجهه با فشار اقتصادی.</p>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <p className="research-dialog-footer about-dialog-footer">
+                محورهای دوره، چارچوب مسئله‌اند؛ نه حصاری برای خلاقیت. ایده‌های تازه و
+                بین‌محوری نیز می‌توانند به گفت‌وگو دربارهٔ راه‌حل‌های اجتماعی بیفزایند.
+              </p>
+            </div>
+          </section>
+        </div>
+      )}
 
       {storageError && (
         <p className="storage-error" role="alert">
@@ -1686,12 +2378,13 @@ export default function Home() {
               <span className="landing-entry-divider" aria-hidden="true" />
               <div className="landing-input-wrap">
                 <label className="sr-only" htmlFor="idea-seed">
-                  ایده‌تان را با واژه‌های خودتان توضیح دهید
+                  ایده یا مسئله‌ای را که در ذهنتان است با واژه‌های خودتان بنویسید
                 </label>
                 <textarea
                   id="idea-seed"
+                  ref={seedInputRef}
                   className="seed-input landing-seed-input"
-                  placeholder="ایده‌تان را اینجا بنویسید…"
+                  placeholder="ایده، مسئله یا چیزی را که ذهنتان را مشغول کرده بنویسید…"
                   value={seed}
                   onChange={(event) => {
                     const textarea = event.currentTarget;
@@ -1708,6 +2401,10 @@ export default function Home() {
                   dir="auto"
                   aria-describedby="seed-hint seed-error"
                 />
+                <SpeechInputControl
+                  onTranscript={appendSeedTranscript}
+                  onBusyChange={setSeedSpeechBusy}
+                />
               </div>
             </div>
             <div
@@ -1719,22 +2416,23 @@ export default function Home() {
                 type="button"
                 className="primary-button landing-choice landing-choice-primary"
                 onClick={startIdea}
-                disabled={!seed.trim() || !canCreateIdea(state, registrations.length)}
+                disabled={seedSpeechBusy || !seed.trim() || !canCreateIdea(state, registrations.length)}
               >
                 <span className="landing-choice-icon">
                   <Sprout size={24} strokeWidth={1.8} aria-hidden="true" />
                 </span>
                 <span className="landing-choice-copy">
-                  <b>پرورش ایده</b>
+                  <b>توسعهٔ ایده</b>
                   <small>قدم‌به‌قدم، با راهنمایی هوشمند</small>
                 </span>
               </button>
               <button
                 type="button"
                 className="landing-choice landing-choice-secondary"
-                onClick={startStructuredRegistration}
+                onClick={() => startStructuredRegistration()}
                 disabled={
-                  !registrations.some((item) => item.status === "draft") &&
+                  seedSpeechBusy ||
+                  !registrations.some(hasUnfinishedStructuredRegistration) &&
                   !canCreateIdea(state, registrations.length)
                 }
               >
@@ -1743,16 +2441,32 @@ export default function Home() {
                 </span>
                 <span className="landing-choice-copy">
                   <b>
-                    {registrations.some((item) => item.status === "draft") ? "ادامهٔ ثبت ایده" : "ثبت ایده"}
+                    {registrations.some(hasUnfinishedStructuredRegistration)
+                      ? "ادامهٔ ثبت ایده"
+                      : "تکمیل فرم ثبت"}
                   </b>
-                  <small>ایده‌تان را برای رویداد ثبت کنید</small>
+                  <small>فرم ثبت ایده را باز کنید</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="landing-choice landing-choice-secondary landing-choice-guided"
+                onClick={startIdeaMentor}
+                disabled={seedSpeechBusy || !seed.trim() || !canCreateIdea(state, registrations.length)}
+              >
+                <span className="landing-choice-icon">
+                  <MessageCircle size={22} strokeWidth={1.8} aria-hidden="true" />
+                </span>
+                <span className="landing-choice-copy">
+                  <b>ثبت ایده</b>
+                  <small>با گفت‌وگوی راهنمای هوشمند</small>
                 </span>
               </button>
             </div>
             <div className="composer-meta landing-composer-meta">
               <span id="seed-hint">
                 <Info size={16} aria-hidden="true" />
-                ایده‌تان را بنویسید و نخستین گام را برای نوآوری بردارید
+                ایده، پرسش یا تجربه‌تان را بنویسید؛ با هم مسیر مناسب را پیدا می‌کنیم
               </span>
               <span>{formatNumber(seed.length)}/{formatNumber(600)}</span>
             </div>
@@ -1830,6 +2544,172 @@ export default function Home() {
         </section>
       )}
 
+      {screen === "idea-mentor" && (
+        <section className="journey-view idea-mentor-view">
+          <div className="idea-mentor-heading">
+            <div className="idea-mentor-heading-copy">
+              <div className="eyebrow">
+                <span className="eyebrow-line" />
+                کارگاه ایده
+              </div>
+              <h1>از همین‌جا شروع کنیم</h1>
+              <p>با هم فکر اولیه را به مسئله‌ای روشن‌تر تبدیل می‌کنیم.</p>
+            </div>
+            <button
+              className="back-link"
+              onClick={() => setScreen("home")}
+              aria-label="بازگشت به صفحهٔ اصلی"
+              title="بازگشت به صفحهٔ اصلی"
+            >
+              <ArrowLeft size={16} aria-hidden="true" />
+              بازگشت
+            </button>
+          </div>
+          <div className="idea-mentor-panel">
+            <div className="mentor-chat-topline">
+              <span className="mentor-chat-avatar" aria-hidden="true">
+                <Sparkles size={20} />
+              </span>
+              <div className="mentor-chat-person">
+                <b>همراه شما در مسیر ایده</b>
+                <span><i /> گفت‌وگوی امروز</span>
+              </div>
+              <span className="mentor-chat-badge">
+                <Sparkles size={14} /> راهنمای اجتماعی
+              </span>
+            </div>
+            <div
+              className="mentor-chat-thread idea-mentor-thread"
+              role="log"
+              aria-live="polite"
+              aria-relevant="additions"
+            >
+              {ideaMentorMessages.map((message, index) => (
+                <div
+                  className={`mentor-chat-row${message.role === "user" ? " is-user" : " is-mentor"}`}
+                  key={`${message.role}-${index}`}
+                >
+                  {message.role === "assistant" && (
+                    <span className="mentor-chat-mini-avatar" aria-hidden="true">
+                      <Sparkles size={13} />
+                    </span>
+                  )}
+                  <p dir="auto"><bdi>{message.content}</bdi></p>
+                </div>
+              ))}
+              {ideaMentorBusy && (
+                <div className="mentor-chat-row is-mentor">
+                  <span className="mentor-chat-mini-avatar" aria-hidden="true">
+                    <Sparkles size={13} />
+                  </span>
+                  <p className="mentor-chat-typing" role="status">
+                    <i /><i /><i />
+                    <span className="sr-only">منتور در حال فکرکردن است</span>
+                  </p>
+                </div>
+              )}
+              <div ref={ideaMentorEndRef} />
+            </div>
+            {ideaMentorStage === "confirm-registration" && (
+              <div className="mentor-chat-suggestions idea-mentor-actions">
+                <button
+                  type="button"
+                  disabled={ideaMentorBusy || !ideaMentorIdea}
+                  onClick={() => startStructuredRegistration(ideaMentorIdea)}
+                >
+                  بله، ادامهٔ ثبت ایده <ArrowLeft size={13} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  disabled={ideaMentorBusy}
+                  onClick={() =>
+                    void sendIdeaMentorMessage(
+                      ideaMentorReassuranceOffered
+                        ? "نه، فعلاً خودم به ایده‌ام فکر می‌کنم."
+                        : "مطمئن نیستم؛ می‌خوام قبل از تصمیم برای ثبت، بیشتر دربارهٔ ایده‌ام با منتور گفت‌وگو کنم.",
+                    )
+                  }
+                >
+                  {ideaMentorReassuranceOffered
+                    ? "نه، فعلاً خودم فکر می‌کنم"
+                    : "فعلاً مطمئن نیستم؛ بیشتر گفت‌وگو کنیم"}
+                  <ArrowLeft size={13} aria-hidden="true" />
+                </button>
+              </div>
+            )}
+            {ideaMentorStage === "not-now" && (
+              <div className="mentor-chat-suggestions idea-mentor-actions">
+                <span role="status">
+                  گفت‌وگو فعلاً متوقف شده است؛ اگر نظرت عوض شد، می‌توانی ثبت ایده را ادامه بدهی.
+                </span>
+                <button
+                  type="button"
+                  disabled={ideaMentorBusy || !ideaMentorIdea}
+                  onClick={() => startStructuredRegistration(ideaMentorIdea)}
+                >
+                  با این حال، ایده‌ام را ثبت می‌کنم
+                  <ArrowLeft size={13} aria-hidden="true" />
+                </button>
+              </div>
+            )}
+            {ideaMentorError && (
+              <p className="mentor-chat-error" role="alert">
+                {ideaMentorError}
+              </p>
+            )}
+            <form
+              className="mentor-chat-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void sendIdeaMentorMessage(ideaMentorDraft);
+              }}
+            >
+              <textarea
+                ref={ideaMentorInputRef}
+                value={ideaMentorDraft}
+                onChange={(event) => setIdeaMentorDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendIdeaMentorMessage(ideaMentorDraft);
+                  }
+                }}
+                maxLength={1200}
+                rows={2}
+                placeholder={
+                  ideaMentorStage === "not-now"
+                    ? "گفت‌وگو فعلاً متوقف شده است"
+                    : "هرچه به ذهنت می‌رسد بنویس…"
+                }
+                aria-label="پیام شما به منتور ثبت ایده"
+                disabled={ideaMentorBusy || ideaMentorStage === "not-now"}
+              />
+              <button
+                type="submit"
+                disabled={
+                  ideaMentorBusy ||
+                  ideaMentorStage === "not-now" ||
+                  !ideaMentorDraft.trim()
+                }
+                aria-label="ارسال پیام"
+              >
+                <Send size={18} aria-hidden="true" />
+              </button>
+              <span>
+                {ideaMentorStage === "not-now"
+                  ? "هر زمان آماده بودی، می‌توانی دوباره از صفحهٔ اصلی شروع کنی."
+                  : "Enter برای ارسال · Shift + Enter برای خط بعد"}
+              </span>
+            </form>
+            <p className="mentor-chat-footnote">
+              <ShieldCheck size={14} aria-hidden="true" />
+              برای پاسخ‌گویی، پیام‌ها به سرویس هوش مصنوعی فرستاده می‌شوند؛ اطلاعات
+              هویتی و تماس را ننویس.
+            </p>
+          </div>
+        </section>
+      )}
+
       {screen === "structured" && activeRegistration && (
         <StructuredRegistrationForm
           registration={activeRegistration}
@@ -1837,11 +2717,12 @@ export default function Home() {
           onChange={persistRegistration}
           onBack={() => {
             setActiveRegistration(null);
-            setScreen("home");
+            setScreen(structuredReturnScreenRef.current);
           }}
           onSubmit={(registration) => submitRegistration({
             ...registration,
             status: "submitted",
+            activeFlow: "dashboard",
             submittedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           })}
@@ -2743,6 +3624,53 @@ export default function Home() {
                   </div>
                 </article>
               ))}
+              {registrations.map((registration, index) => {
+                const title = registration.data.title.trim() ||
+                  registration.data.problem.trim().replace(/\s+/gu, " ").slice(0, 48) ||
+                  "ایدهٔ تازه";
+                const isUnfinished = hasUnfinishedStructuredRegistration(registration);
+                return (
+                  <article className="idea-row" key={`structured-${registration.id}`}>
+                    <div className="idea-number">
+                      {formatNumber(state.ideas.length + index + 1).padStart(2, formatNumber(0))}
+                    </div>
+                    <div className="idea-content">
+                      <div className="idea-title-line">
+                        <h3><bdi dir="auto">{title}</bdi></h3>
+                        <span className={`status-pill ${isUnfinished ? "status-in-development" : "status-submitted"}`}>
+                          {isUnfinished ? "در حال تکمیل" : "ثبت‌شده"}
+                        </span>
+                      </div>
+                      <p className="idea-seed" dir="auto">
+                        {registration.data.problem.trim() || "فرم اولیهٔ ثبت ایده"}
+                      </p>
+                      <div className="idea-meta">
+                        <span>
+                          <Clock3 size={14} />
+                          به‌روزرسانی: {formatDate(registration.updatedAt)}
+                        </span>
+                        <span><FileText size={14} /> فرم ثبت ایده</span>
+                      </div>
+                    </div>
+                    <div className="idea-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() => openStructuredRegistration(registration)}
+                      >
+                        {isUnfinished ? "ادامهٔ ثبت ایده" : "مرور ثبت"}
+                        <ArrowRight size={16} />
+                      </button>
+                      <button
+                        className="delete-idea-button"
+                        onClick={() => deleteStructuredRegistration(registration, title)}
+                        aria-label={`حذف ایدهٔ ${title}`}
+                      >
+                        حذف ایده <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
           {!canCreateIdea(state, registrations.length) && (

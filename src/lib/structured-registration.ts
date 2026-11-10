@@ -19,6 +19,29 @@ export const REGISTRATION_STEPS = [
 
 export type RegistrationStep = (typeof REGISTRATION_STEPS)[number];
 export type RegistrationStatus = "draft" | "submitted";
+export type WorkbookFlow = "C" | "P" | "S" | "E";
+export type RegistrationFlow = "F" | WorkbookFlow | "dashboard";
+
+export type WorkbookListItem = {
+  text: string;
+  detail: string;
+  choice: string;
+};
+
+export type WorkbookAnswerValue =
+  | string
+  | string[]
+  | boolean
+  | WorkbookListItem[]
+  | Record<string, string>;
+
+export type WorkbookAnswers = Record<string, WorkbookAnswerValue>;
+
+export type WorkbookProgress = {
+  status: "locked" | "available" | "draft" | "submitted";
+  step: string;
+  answers: WorkbookAnswers;
+};
 
 export type StructuredRegistrationData = {
   education: string;
@@ -52,7 +75,9 @@ export type StructuredRegistration = {
   id: string;
   status: RegistrationStatus;
   step: RegistrationStep;
+  activeFlow: RegistrationFlow;
   data: StructuredRegistrationData;
+  workbooks: Record<WorkbookFlow, WorkbookProgress>;
   createdAt: string;
   updatedAt: string;
   submittedAt?: string;
@@ -161,7 +186,22 @@ export function createStructuredDraft(now = new Date()): StructuredRegistration 
     id: typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    status: "draft", step: "intro", data: emptyRegistrationData(), createdAt: timestamp, updatedAt: timestamp,
+    status: "draft",
+    step: "intro",
+    activeFlow: "F",
+    data: emptyRegistrationData(),
+    workbooks: emptyWorkbookProgress(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+export function emptyWorkbookProgress(): Record<WorkbookFlow, WorkbookProgress> {
+  return {
+    C: { status: "locked", step: "C01", answers: {} },
+    P: { status: "locked", step: "P01", answers: {} },
+    S: { status: "locked", step: "S01", answers: {} },
+    E: { status: "locked", step: "E01", answers: {} },
   };
 }
 
@@ -205,14 +245,105 @@ export function normalizeRegistrationStore(value: unknown): StructuredRegistrati
       typeof date === "string" && Number.isFinite(Date.parse(date))
         ? new Date(date).toISOString()
         : new Date(0).toISOString();
+    const workbookSource =
+      candidate.workbooks && typeof candidate.workbooks === "object"
+        ? candidate.workbooks as Partial<Record<WorkbookFlow, unknown>>
+        : {};
+    const workbooks = normalizeWorkbookProgress(workbookSource, status);
+    const activeFlow = normalizeActiveFlow(candidate.activeFlow, status, workbooks);
     const normalized: StructuredRegistration = {
-      id: candidate.id.slice(0, 100), status, step,
+      id: candidate.id.slice(0, 100),
+      status,
+      step,
+      activeFlow,
       data: normalizeRegistrationData(candidate.data),
+      workbooks,
       createdAt: validDate(candidate.createdAt), updatedAt: validDate(candidate.updatedAt),
     };
     if (status === "submitted") normalized.submittedAt = validDate(candidate.submittedAt);
     return [normalized];
   });
+}
+
+function normalizeActiveFlow(
+  value: unknown,
+  status: RegistrationStatus,
+  workbooks: Record<WorkbookFlow, WorkbookProgress>,
+): RegistrationFlow {
+  if (value === "F") return "F";
+  if (value === "dashboard" && status === "submitted") return "dashboard";
+  if (
+    (value === "C" || value === "P" || value === "S" || value === "E") &&
+    status === "submitted" &&
+    workbooks[value].status !== "locked"
+  ) return value;
+  return status === "submitted" ? "dashboard" : "F";
+}
+
+function normalizeWorkbookProgress(
+  source: Partial<Record<WorkbookFlow, unknown>>,
+  registrationStatus: RegistrationStatus,
+): Record<WorkbookFlow, WorkbookProgress> {
+  const defaults = emptyWorkbookProgress();
+  const flows: WorkbookFlow[] = ["C", "P", "S", "E"];
+  for (const [index, flow] of flows.entries()) {
+    const item = source[flow] && typeof source[flow] === "object"
+      ? source[flow] as Partial<WorkbookProgress>
+      : {};
+    const previousComplete = index === 0 || defaults[flows[index - 1]].status === "submitted";
+    const allowed = registrationStatus === "submitted" && previousComplete;
+    const status = !allowed
+      ? "locked"
+      : item.status === "submitted"
+        ? "submitted"
+        : item.status === "draft"
+          ? "draft"
+          : "available";
+    defaults[flow] = {
+      status,
+      step: typeof item.step === "string" && item.step.startsWith(flow)
+        ? item.step.slice(0, 3)
+        : `${flow}01`,
+      answers: normalizeWorkbookAnswers(item.answers),
+    };
+  }
+  return defaults;
+}
+
+function normalizeWorkbookAnswers(value: unknown): WorkbookAnswers {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const normalized: WorkbookAnswers = {};
+  for (const [key, answer] of Object.entries(value).slice(0, 100)) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,59}$/.test(key)) continue;
+    if (typeof answer === "string") {
+      normalized[key] = answer.slice(0, 4000);
+    } else if (typeof answer === "boolean") {
+      normalized[key] = answer;
+    } else if (Array.isArray(answer)) {
+      if (!answer.some((item) => item && typeof item === "object")) {
+        normalized[key] = answer.filter((item): item is string => typeof item === "string").slice(0, 50).map((item) => item.slice(0, 300));
+      } else {
+        normalized[key] = answer.flatMap((item): WorkbookListItem[] => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+          const row = item as Partial<WorkbookListItem>;
+          return [{
+            text: typeof row.text === "string" ? row.text.slice(0, 4000) : "",
+            detail: typeof row.detail === "string" ? row.detail.slice(0, 4000) : "",
+            choice: typeof row.choice === "string" ? row.choice.slice(0, 300) : "",
+          }];
+        }).slice(0, 50);
+      }
+    } else if (answer && typeof answer === "object") {
+      normalized[key] = Object.fromEntries(
+        Object.entries(answer).slice(0, 50).flatMap(([entryKey, entryValue]) =>
+          typeof entryValue === "string" && entryKey.length <= 100
+            ? [[entryKey, entryValue.slice(0, 4000)]]
+            : [],
+        ),
+      );
+    }
+  }
+  return normalized;
 }
 
 export function visibleRegistrationSteps(data: StructuredRegistrationData): RegistrationStep[] {
@@ -251,8 +382,7 @@ export function validateRegistrationStep(
       return data.city === "سایر" && !data.cityOther.trim() ? "نام شهر را بنویسید." : "";
     }
     case "problem":
-      if (!data.problem.trim()) return "دربارهٔ مسئله‌ای که دیده‌اید بنویسید.";
-      return countWords(data.problem) < 20 ? "پاسخ مسئله باید دست‌کم ۲۰ واژه داشته باشد." : "";
+      return data.problem.trim() ? "" : "دربارهٔ مسئله‌ای که دیده‌اید بنویسید.";
     case "place":
       if (!PLACES.includes(data.place as (typeof PLACES)[number])) return "محل مشاهدهٔ مسئله را انتخاب کنید.";
       return data.place === "جای دیگری" && !data.placeOther.trim() ? "محل دیگر را مشخص کنید." : "";

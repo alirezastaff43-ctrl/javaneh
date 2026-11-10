@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Clock3, Eye, FileText } from "lucide-react";
+import MentorGuidedTextarea, { type MentorGuidedTextareaHandle } from "./mentor-guided-textarea";
+import { SpeechEnabledTextarea } from "./speech-input-control";
 import {
   AXES,
   AUDIENCES,
@@ -18,7 +20,24 @@ import {
   type RegistrationStep,
   type StructuredRegistration,
   type StructuredRegistrationData,
+  type WorkbookAnswerValue,
+  type WorkbookAnswers,
+  type WorkbookFlow,
+  type WorkbookListItem,
 } from "@/lib/structured-registration";
+import {
+  WORKBOOKS,
+  WORKBOOK_FLOW_ORDER,
+  getWorkbookPage,
+  getWorkbookPageIndex,
+  readListItems,
+  readStringArray,
+  readStringRecord,
+  readText,
+  validateWorkbookPage,
+  type WorkbookField,
+  type WorkbookOption,
+} from "@/lib/workbook-forms";
 
 type Props = {
   registration: StructuredRegistration;
@@ -33,6 +52,43 @@ const unsureOutcome = OUTCOMES[7];
 const otherGroup = BENEFICIARY_GROUPS[7];
 const unsureGroup = BENEFICIARY_GROUPS[8];
 
+function lockWorkbooks(
+  workbooks: StructuredRegistration["workbooks"],
+): StructuredRegistration["workbooks"] {
+  return {
+    C: { ...workbooks.C, status: "locked", step: "C01" },
+    P: { ...workbooks.P, status: "locked", step: "P01" },
+    S: { ...workbooks.S, status: "locked", step: "S01" },
+    E: { ...workbooks.E, status: "locked", step: "E01" },
+  };
+}
+
+function registrationMentorContext(
+  registration: StructuredRegistration,
+  currentStep?: RegistrationStep,
+) {
+  const { problem, place, placeOther, better, action, outcomes, groups, title } = registration.data;
+  const entries = [
+    ["مسئله", problem],
+    ["محل", place === "جای دیگری" ? placeOther : place],
+    ["وضعیت بهتر", better],
+    ["اقدام", action],
+    ["پیامدها", outcomes.join("، ")],
+    ["گروه‌های بهره‌مند", groups.join("، ")],
+    ["عنوان", title],
+  ] as const;
+  const contextOrder = ["problem", "place", "better", "action", "outcomes", "groups", "title"];
+  const currentIndex = currentStep === "refine"
+    ? contextOrder.indexOf("action") + 1
+    : currentStep
+      ? contextOrder.indexOf(currentStep)
+      : entries.length;
+  return JSON.stringify(entries
+    .slice(0, currentIndex < 0 ? entries.length : currentIndex)
+    .filter(([, answer]) => answer.trim())
+    .map(([question, answer]) => ({ question, answer })));
+}
+
 export default function StructuredRegistrationForm({
   registration,
   storageError,
@@ -43,21 +99,563 @@ export default function StructuredRegistrationForm({
   const [error, setError] = useState("");
   const [showExample, setShowExample] = useState(false);
   const [acceptedLocalSave, setAcceptedLocalSave] = useState(false);
+  const guidedAnswerRef = useRef<MentorGuidedTextareaHandle>(null);
   const data = registration.data;
   const steps = visibleRegistrationSteps(data);
   const currentStep = steps.includes(registration.step) ? registration.step : "review";
   const stepIndex = steps.indexOf(currentStep);
+  const [WorkbookJourneyComponent] = useState(() => WorkbookJourney);
+
+  if (registration.status === "submitted" && registration.activeFlow !== "F") {
+    return (
+      <WorkbookJourneyComponent
+        registration={registration}
+        storageError={storageError}
+        onChange={onChange}
+        onBack={onBack}
+      />
+    );
+  }
+
+  type WorkbookJourneyProps = Pick<Props, "registration" | "storageError" | "onChange" | "onBack">;
+
+  function WorkbookJourney({
+    registration,
+    storageError,
+    onChange,
+    onBack,
+  }: WorkbookJourneyProps) {
+    const [error, setError] = useState("");
+    const guidedAnswerRef = useRef<MentorGuidedTextareaHandle>(null);
+
+    function update(patch: Partial<StructuredRegistration>) {
+      onChange({ ...registration, ...patch, updatedAt: new Date().toISOString() });
+      setError("");
+    }
+
+    function startFlow(flow: WorkbookFlow) {
+      const progress = registration.workbooks[flow];
+      if (progress.status === "locked") return;
+      const pages = WORKBOOKS[flow].pages;
+      const startPage = progress.status === "submitted"
+        ? pages[1]?.id ?? pages[0].id
+        : progress.step;
+      update({
+        activeFlow: flow,
+        workbooks: {
+          ...registration.workbooks,
+          [flow]: {
+            ...progress,
+            status: progress.status === "available" ? "draft" : progress.status,
+            step: startPage,
+          },
+        },
+      });
+    }
+
+    function editInitialForm() {
+      update({ activeFlow: "F", step: "review" });
+    }
+
+    const activeFlow = registration.activeFlow;
+
+    if (activeFlow !== "C" && activeFlow !== "P" && activeFlow !== "S" && activeFlow !== "E") {
+      return (
+        <section className="form-view structured-view" aria-labelledby="structured-title">
+          <button className="back-link" type="button" onClick={onBack}>
+            <ArrowLeft size={16} aria-hidden="true" /> بازگشت به صفحهٔ نخست
+          </button>
+          <div className="eyebrow"><span className="eyebrow-line" />ادامهٔ ثبت ایده</div>
+          <h1 id="structured-title">{registration.data.title.trim() || "مسیر تکمیل ایده"}</h1>
+          <p className="form-intro">
+            فرم اولیه در این مرورگر ذخیره شده است. کارویژه‌ها را به‌ترتیب تکمیل کنید؛ اطلاعات به سامانهٔ برگزارکننده ارسال نمی‌شود.
+          </p>
+          <div className="workbook-list">
+            <article className="workbook-card">
+              <div>
+                <span className="workbook-state">تکمیل‌شده</span>
+                <h2>فرم اولیهٔ ثبت ایده</h2>
+              </div>
+              <button type="button" className="subtle-button" onClick={editInitialForm}>ویرایش پاسخ‌ها</button>
+            </article>
+            {WORKBOOK_FLOW_ORDER.map((workbookFlow, index) => {
+              const progress = registration.workbooks[workbookFlow];
+              const locked = progress.status === "locked";
+              const label = progress.status === "submitted"
+                ? "تکمیل‌شده"
+                : progress.status === "draft"
+                  ? "در حال تکمیل"
+                  : locked
+                    ? `پس از ${index === 0 ? "ثبت اولیه" : WORKBOOKS[WORKBOOK_FLOW_ORDER[index - 1]].title}`
+                    : "آمادهٔ شروع";
+              const buttonLabel = progress.status === "submitted"
+                ? "مرور و ویرایش"
+                : progress.status === "draft"
+                  ? "ادامهٔ کارویژه"
+                  : "شروع کارویژه";
+              return (
+                <article className={`workbook-card${locked ? " is-locked" : ""}`} key={workbookFlow}>
+                  <div>
+                    <span className="workbook-state">{label}</span>
+                    <h2>{WORKBOOKS[workbookFlow].title}</h2>
+                    <p>{WORKBOOKS[workbookFlow].pages.length} گام</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={locked ? "subtle-button" : "primary-button"}
+                    onClick={() => startFlow(workbookFlow)}
+                    disabled={locked}
+                  >
+                    {buttonLabel}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+          <p className="structured-draft-note">
+            <FileText size={15} aria-hidden="true" />
+            پاسخ‌ها و پیشرفت کارویژه‌ها فقط در فضای ذخیره‌سازی همین مرورگر نگهداری می‌شوند.
+          </p>
+          {storageError && <p className="inline-error" role="alert">{storageError}</p>}
+        </section>
+      );
+    }
+
+    const flow: WorkbookFlow = activeFlow;
+    const progress = registration.workbooks[flow];
+    const page = getWorkbookPage(flow, progress.step);
+    const pageIndex = getWorkbookPageIndex(flow, page.id);
+    const pages = WORKBOOKS[flow].pages;
+    const progressPercent = Math.round(((pageIndex + 1) / pages.length) * 100);
+
+    function updateAnswers(key: string, value: WorkbookAnswerValue) {
+      const current = registration.workbooks[flow];
+      const changed = JSON.stringify(current.answers[key]) !== JSON.stringify(value);
+      const nextWorkbooks = { ...registration.workbooks };
+      nextWorkbooks[flow] = {
+        ...current,
+        status: changed ? "draft" : current.status,
+        answers: { ...current.answers, [key]: value },
+      };
+      if (changed && current.status === "submitted") {
+        const currentIndex = WORKBOOK_FLOW_ORDER.indexOf(flow);
+        for (const laterFlow of WORKBOOK_FLOW_ORDER.slice(currentIndex + 1)) {
+          nextWorkbooks[laterFlow] = {
+            ...nextWorkbooks[laterFlow],
+            status: "locked",
+            step: WORKBOOKS[laterFlow].pages[0].id,
+          };
+        }
+      }
+      update({ workbooks: nextWorkbooks });
+    }
+
+    function setStep(step: string) {
+      update({
+        workbooks: {
+          ...registration.workbooks,
+          [flow]: { ...progress, step },
+        },
+      });
+    }
+
+    function saveAndReturn() {
+      update({
+        activeFlow: "dashboard",
+        workbooks: {
+          ...registration.workbooks,
+          [flow]: { ...progress, status: progress.status === "available" ? "draft" : progress.status },
+        },
+      });
+    }
+
+    function finishFlow() {
+      const nextWorkbooks = {
+        ...registration.workbooks,
+        [flow]: { ...progress, status: "submitted" as const, step: page.id },
+      };
+      const currentIndex = WORKBOOK_FLOW_ORDER.indexOf(flow);
+      const nextFlow = WORKBOOK_FLOW_ORDER[currentIndex + 1];
+      if (nextFlow && nextWorkbooks[nextFlow].status === "locked") {
+        nextWorkbooks[nextFlow] = { ...nextWorkbooks[nextFlow], status: "available" };
+      }
+      update({ activeFlow: "dashboard", workbooks: nextWorkbooks });
+    }
+
+    async function goNext(event: React.FormEvent<HTMLFormElement>) {
+      event.preventDefault();
+      if (page.kind === "questions") {
+        const validation = validateWorkbookPage(page, progress.answers);
+        if (validation) {
+          setError(validation);
+          return;
+        }
+        const guidedReady = await guidedAnswerRef.current?.review();
+        if (guidedReady === false) return;
+      }
+      if (page.kind === "summary" || pageIndex === pages.length - 1) {
+        finishFlow();
+        return;
+      }
+      setStep(pages[pageIndex + 1].id);
+    }
+
+    function goPrevious() {
+      setError("");
+      if (pageIndex === 0) {
+        update({ activeFlow: "dashboard" });
+        return;
+      }
+      setStep(pages[pageIndex - 1].id);
+    }
+
+    function renderField(field: WorkbookField) {
+      const value = progress.answers[field.key];
+      if (field.type === "long") {
+        return (
+          <MentorGuidedTextarea
+            key={field.key}
+            ref={guidedAnswerRef}
+            id={`workbook-${field.key}`}
+            label={field.label}
+            question={page.question}
+            guide={page.guide ?? field.label}
+            context={`${registrationMentorContext(registration)}\nپاسخ‌های قبلی این کارویژه: ${JSON.stringify(pages.slice(1, pageIndex).map((previousPage) => ({
+              question: previousPage.question,
+              answers: (previousPage.fields ?? []).flatMap((previousField) => formatFieldAnswers(previousField, progress.answers))
+                .filter(([, answer]) => answer.trim()),
+            })).filter(({ answers }) => answers.length > 0)).slice(0, 3000)}`}
+            value={readText(value)}
+            onChange={(answer) => updateAnswers(field.key, answer)}
+            rows={5}
+            maxLength={4000}
+          />
+        );
+      }
+
+      if (field.type === "single" || field.type === "multiple") {
+        const selected = field.type === "single" ? readText(value) : readStringArray(value);
+        const detailsKey = `${field.key}Details`;
+        const details = readStringRecord(progress.answers[detailsKey]);
+        const noteKey = `${field.key}Note`;
+        const noteValue = readText(progress.answers[noteKey]);
+        const toggleOption = (option: WorkbookOption) => {
+          if (field.type === "single") {
+            updateAnswers(field.key, selected === option.value ? "" : option.value);
+            return;
+          }
+          const current = selected as string[];
+          const next = current.includes(option.value)
+            ? current.filter((item) => item !== option.value)
+            : option.exclusive
+              ? [option.value]
+              : [...current.filter((item) => !field.options.find((itemOption) => itemOption.value === item)?.exclusive), option.value];
+          if (field.maximum && next.length > field.maximum) {
+            setError(`حداکثر ${field.maximum} گزینه را انتخاب کنید.`);
+            return;
+          }
+          updateAnswers(field.key, next);
+        };
+        return (
+          <fieldset className="structured-fieldset workbook-choice-set" key={field.key}>
+            <legend>{field.label}</legend>
+            <div className="structured-options" role={field.type === "single" ? "radiogroup" : "group"} aria-label={field.label}>
+              {field.options.map((option) => {
+                const checked = field.type === "single"
+                  ? selected === option.value
+                  : (selected as string[]).includes(option.value);
+                const inputId = `workbook-${field.key}-${option.value}`;
+                return (
+                  <div className="workbook-option" key={option.value}>
+                    <label className="structured-choice" htmlFor={inputId}>
+                      <input
+                        id={inputId}
+                        type={field.type === "single" ? "radio" : "checkbox"}
+                        name={`workbook-${field.key}`}
+                        checked={checked}
+                        onChange={() => toggleOption(option)}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                    {checked && option.detailLabel && (
+                      <label className="structured-field workbook-option-detail" htmlFor={`${inputId}-detail`}>
+                        <span>{option.detailLabel}</span>
+                        <input
+                          id={`${inputId}-detail`}
+                          value={details[option.value] ?? ""}
+                          onChange={(event) => updateAnswers(detailsKey, {
+                            ...details,
+                            [option.value]: event.target.value,
+                          })}
+                          maxLength={500}
+                          dir="auto"
+                        />
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {field.noteLabel && (
+              <SpeechEnabledTextarea
+                id={`workbook-${noteKey}`}
+                label={`${field.noteLabel} (اختیاری)`}
+                value={noteValue}
+                onChange={(answer) => updateAnswers(noteKey, answer)}
+                rows={3}
+                maxLength={2000}
+              />
+            )}
+          </fieldset>
+        );
+      }
+
+      if (field.type === "boxes") {
+        const unsureKey = `${field.key}Unsure`;
+        const unsure = Boolean(progress.answers[unsureKey]);
+        return (
+          <div className="workbook-boxes" key={field.key}>
+            {field.labels.map((label, index) => {
+              const key = `${field.key}${index}`;
+              return (
+                <SpeechEnabledTextarea
+                  key={key}
+                  id={`workbook-${key}`}
+                  label={label}
+                  value={readText(progress.answers[key])}
+                  onChange={(answer) => updateAnswers(key, answer)}
+                  rows={3}
+                  maxLength={2000}
+                />
+              );
+            })}
+            {field.unsureLabel && (
+              <label className="structured-choice">
+                <input
+                  type="checkbox"
+                  checked={unsure}
+                  onChange={(event) => updateAnswers(unsureKey, event.target.checked)}
+                />
+                <span>{field.unsureLabel}</span>
+              </label>
+            )}
+          </div>
+        );
+      }
+
+      const items = readListItems(value);
+      const rows = items.length
+        ? items
+        : Array.from({ length: field.initial ?? 1 }, () => ({ text: "", detail: "", choice: "" }));
+      const none = readStringArray(progress.answers[`${field.key}None`]);
+      return (
+        <div className="workbook-list-field" key={field.key}>
+          {field.title && <p className="workbook-list-title">{field.title}</p>}
+          {rows.map((item, index) => {
+            const nextItems = (patch: Partial<WorkbookListItem>) => {
+              const updated = rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row);
+              updateAnswers(field.key, updated);
+            };
+            return (
+              <div className="workbook-list-item" key={`${field.key}-${index}`}>
+                <SpeechEnabledTextarea
+                  id={`workbook-${field.key}-${index}`}
+                  label={`${field.label} ${new Intl.NumberFormat("fa-IR").format(index + 1)}`}
+                  value={item.text}
+                  onChange={(answer) => nextItems({ text: answer })}
+                  rows={3}
+                  maxLength={2000}
+                />
+                {field.secondLabel && (
+                  <SpeechEnabledTextarea
+                    id={`workbook-${field.key}-${index}-detail`}
+                    label={field.secondLabel}
+                    value={item.detail}
+                    onChange={(answer) => nextItems({ detail: answer })}
+                    rows={3}
+                    maxLength={2000}
+                  />
+                )}
+                {field.choices && (
+                  <fieldset className="structured-fieldset">
+                    <legend>{field.label} {new Intl.NumberFormat("fa-IR").format(index + 1)}: وضعیت</legend>
+                    <div className="structured-options">
+                      {field.choices.map((choice) => (
+                        <label className="structured-choice" key={choice}>
+                          <input
+                            type="radio"
+                            name={`workbook-${field.key}-${index}-choice`}
+                            checked={item.choice === choice}
+                            onChange={() => nextItems({ choice })}
+                          />
+                          <span>{choice}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                )}
+              </div>
+            );
+          })}
+          {rows.length < (field.maximum ?? 50) && (
+            <button
+              type="button"
+              className="subtle-button workbook-add-button"
+              onClick={() => updateAnswers(field.key, [...rows, { text: "", detail: "", choice: "" }])}
+            >
+              {field.addLabel}
+            </button>
+          )}
+          {!!field.noneOptions?.length && (
+            <div className="structured-options">
+              {field.noneOptions.map((noneOption) => (
+                <label className="structured-choice" key={noneOption}>
+                  <input
+                    type="checkbox"
+                    checked={none.includes(noneOption)}
+                    onChange={() => updateAnswers(`${field.key}None`,
+                      none.includes(noneOption) ? none.filter((item) => item !== noneOption) : [...none, noneOption])}
+                  />
+                  <span>{noneOption}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function reviewRows() {
+      return WORKBOOKS[flow].pages
+        .filter((item) => item.kind === "questions")
+        .map((item) => ({
+          page: item,
+          answers: (item.fields ?? []).flatMap((field) => formatFieldAnswers(field, progress.answers)),
+        }));
+    }
+
+    return (
+      <section className="form-view structured-view" aria-labelledby="workbook-title">
+        <button className="back-link" type="button" onClick={goPrevious}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          {pageIndex === 0 ? "بازگشت به کارویژه‌ها" : "مرحلهٔ قبل"}
+        </button>
+        <div className="eyebrow"><span className="eyebrow-line" />{WORKBOOKS[flow].title}</div>
+        <div className="structured-heading-row">
+          <div>
+            <h1 id="workbook-title">{page.title}</h1>
+            <p className="form-intro">{page.question}</p>
+          </div>
+          <span className="step-count" aria-label={`گام ${pageIndex + 1} از ${pages.length}`}>
+            {new Intl.NumberFormat("fa-IR").format(pageIndex + 1)}
+            <span> از {new Intl.NumberFormat("fa-IR").format(pages.length)}</span>
+          </span>
+        </div>
+        <div
+          className="progress-track structured-progress"
+          role="progressbar"
+          aria-label="پیشرفت کارویژه"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+        >
+          <span style={{ width: `${progressPercent}%` }} />
+        </div>
+        <div className="structured-step-content">
+          {page.guide && <p>{page.guide}</p>}
+          {page.kind === "questions" && (page.fields ?? []).map(renderField)}
+          {page.example && (
+            <details className="workbook-example">
+              <summary>{page.exampleLabel ?? "مشاهدهٔ مثال"}</summary>
+              <p>{page.example}</p>
+            </details>
+          )}
+          {page.kind === "summary" && (
+            <div className="workbook-review">
+              {reviewRows().map(({ page: answerPage, answers }) => (
+                <section className="workbook-review-section" key={answerPage.id}>
+                  <div className="workbook-review-heading">
+                    <h2>{answerPage.title}</h2>
+                    <button type="button" className="text-button" onClick={() => setStep(answerPage.id)}>ویرایش</button>
+                  </div>
+                  <dl className="structured-review-list">
+                    {answers.map(([label, answer], index) => (
+                      <div className="structured-review-row" key={`${answerPage.id}-${label}-${index}`}>
+                        <dt>{label}</dt>
+                        <dd dir="auto">{answer || "—"}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+        {storageError && <p className="inline-error" role="alert">{storageError}</p>}
+        {error && <p className="inline-error" role="alert">{error}</p>}
+        <form className="structured-actions workbook-actions" onSubmit={goNext} noValidate>
+          {page.kind !== "summary" && (
+            <button className="subtle-button" type="button" onClick={saveAndReturn}>ذخیره و بعداً ادامه می‌دهم</button>
+          )}
+          <button className="primary-button" type="submit">
+            {page.nextLabel ?? (pageIndex === pages.length - 1 ? "ثبت پاسخ" : "ادامه")}
+            {page.kind !== "summary" && <ArrowRight size={17} aria-hidden="true" />}
+          </button>
+        </form>
+        <p className="structured-draft-note">
+          <FileText size={15} aria-hidden="true" />
+          پاسخ‌ها به‌صورت خودکار و محلی ذخیره می‌شوند؛ این فرم برای برگزارکننده ارسال نمی‌شود.
+        </p>
+      </section>
+    );
+  }
+
+  function formatFieldAnswers(
+    field: WorkbookField,
+    answers: WorkbookAnswers,
+  ): Array<[string, string]> {
+    const answer = answers[field.key];
+    if (field.type === "long") return [[field.label, readText(answer)]];
+    if (field.type === "single") {
+      const selected = field.options.find((option) => option.value === answer);
+      const note = readText(answers[`${field.key}Note`]);
+      return [[field.label, [selected?.label, note].filter(Boolean).join(" — ")]];
+    }
+    if (field.type === "multiple") {
+      const selected = readStringArray(answer);
+      const details = readStringRecord(answers[`${field.key}Details`]);
+      const summary = selected.map((value) => {
+        const option = field.options.find((item) => item.value === value);
+        return [option?.label ?? value, details[value]].filter(Boolean).join(": ");
+      }).join("، ");
+      return [[field.label, [summary, readText(answers[`${field.key}Note`])].filter(Boolean).join(" — ")]];
+    }
+    if (field.type === "boxes") {
+      if (answers[`${field.key}Unsure`]) return [[field.labels.join("، "), field.unsureLabel ?? "هنوز نمی‌دانم"]];
+      return field.labels.map((label, index) => [label, readText(answers[`${field.key}${index}`])]);
+    }
+    const items = readListItems(answer)
+      .filter((item) => item.text.trim())
+      .map((item) => [item.text, item.detail, item.choice ? `(${item.choice})` : ""].filter(Boolean).join(" — "));
+    const noneOptions = readStringArray(answers[`${field.key}None`]);
+    return [[field.title ?? field.label, [...items, ...noneOptions].join("؛ ")]];
+  }
 
   function updateData(patch: Partial<StructuredRegistrationData>) {
     setError("");
+    const workbooks: StructuredRegistration["workbooks"] = registration.status === "submitted"
+        ? lockWorkbooks(registration.workbooks)
+        : registration.workbooks;
     onChange({
       ...registration,
+      activeFlow: "F",
+      workbooks,
       data: { ...data, ...patch },
       updatedAt: new Date().toISOString(),
     });
   }
 
-  function goNext(event?: React.FormEvent<HTMLFormElement>) {
+  async function goNext(event?: React.FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     if (currentStep !== "review") {
       const validation = validateRegistrationStep(currentStep, data);
@@ -65,6 +663,8 @@ export default function StructuredRegistrationForm({
         setError(validation);
         return;
       }
+      const guidedReady = await guidedAnswerRef.current?.review();
+      if (guidedReady === false) return;
     } else if (!acceptedLocalSave) {
       setError("برای ثبت محلی، تأیید ذخیره‌شدن پاسخ‌ها در همین مرورگر را انتخاب کنید.");
       return;
@@ -105,8 +705,13 @@ export default function StructuredRegistrationForm({
               : {};
     const next = steps[stepIndex + 1];
     setError("");
+    const workbooks = registration.status === "submitted"
+      ? lockWorkbooks(registration.workbooks)
+      : registration.workbooks;
     onChange({
       ...registration,
+      activeFlow: "F",
+      workbooks,
       data: { ...data, ...skippedData },
       ...(next ? { step: next } : {}),
       updatedAt: new Date().toISOString(),
@@ -189,20 +794,23 @@ export default function StructuredRegistrationForm({
     onValue: (value: string) => void,
     rows = 5,
     describedBy?: string,
+    guidance = "پاسختان را با یک نمونه یا جزئیات مشخص مرتبط با همین سؤال روشن کنید.",
+    question = label,
   ) {
     return (
-      <label className="structured-field" htmlFor={id}>
-        <span>{label}</span>
-        <textarea
-          id={id}
-          value={value}
-          onChange={(event) => onValue(event.target.value)}
-          rows={rows}
-          maxLength={4000}
-          dir="auto"
-          aria-describedby={describedBy}
-        />
-      </label>
+      <MentorGuidedTextarea
+        ref={guidedAnswerRef}
+        id={id}
+        label={label}
+        question={question}
+        guide={guidance}
+        value={value}
+        onChange={onValue}
+        context={registrationMentorContext(registration, currentStep)}
+        rows={rows}
+        maxLength={4000}
+        describedBy={describedBy}
+      />
     );
   }
 
@@ -274,18 +882,7 @@ export default function StructuredRegistrationForm({
         {currentStep === "intro" ? "بازگشت به صفحهٔ نخست" : "مرحلهٔ قبل"}
       </button>
 
-      {registration.status === "submitted" ? (
-        <div className="structured-success" role="status">
-          <span className="step-icon"><Check size={25} aria-hidden="true" /></span>
-          <div className="eyebrow"><span className="eyebrow-line" />ثبت محلی انجام شد</div>
-          <h1 id="structured-title">پاسخ‌ها در این مرورگر ذخیره شدند</h1>
-          <p className="form-intro">
-            این ثبت فقط در فضای ذخیره‌سازی همین مرورگر قرار دارد و برای برگزارکننده ارسال یا با حسابی همگام نشده است.
-          </p>
-          <button className="primary-button" type="button" onClick={onBack}>بازگشت به صفحهٔ نخست</button>
-        </div>
-      ) : (
-        <>
+      <>
           <div className="eyebrow"><span className="eyebrow-line" />فرم اولیهٔ ثبت ایده</div>
           <div className="structured-heading-row">
             <div>
@@ -356,9 +953,9 @@ export default function StructuredRegistrationForm({
           {currentStep === "problem" && (
             <div className="structured-step-content">
               <p>یک نمونهٔ واقعی از چیزی که خودتان دیده‌اید یا تجربه کرده‌اید تعریف کنید. لازم نیست رسمی یا تخصصی بنویسید؛ همان‌طور بنویسید که برای دوستی تعریف می‌کنید.</p>
-              {textArea("registration-problem", "چه مسئله‌ای را می‌توان بهتر کرد؟", data.problem, (problem) => updateData({ problem }), 7, "problem-guide problem-count")}
+              {textArea("registration-problem", "چه مسئله‌ای را می‌توان بهتر کرد؟", data.problem, (problem) => updateData({ problem }), 7, "problem-guide problem-count", "یک موقعیت واقعی را توصیف کنید: چه اتفاقی می‌افتد، برای چه کسانی و در چه شرایطی؟")}
               <div className="structured-field-hint" id="problem-guide">برای نمونه: هر روز مقدار زیادی غذای سالم در محل کار دور ریخته می‌شود. یا بسیاری از سالمندان محله برای کارهای اینترنتی روزمره به کمک دسترسی ندارند.</div>
-              <div className="structured-field-hint" id="problem-count" aria-live="polite">{new Intl.NumberFormat("fa-IR").format(countWords(data.problem))} واژه از ۲۰ واژهٔ لازم</div>
+              <div className="structured-field-hint" id="problem-count" aria-live="polite">{new Intl.NumberFormat("fa-IR").format(countWords(data.problem))} واژه</div>
             </div>
           )}
 
@@ -373,7 +970,7 @@ export default function StructuredRegistrationForm({
           {currentStep === "better" && (
             <div className="structured-step-content">
               <p>فرض کنید این مسئله بهتر شده است. مهم‌ترین تغییری که مردم واقعاً متوجه آن می‌شوند چیست؟</p>
-              {textArea("registration-better", "تصویر وضعیت بهتر", data.better, (better) => updateData({ better }), 5)}
+              {textArea("registration-better", "تصویر وضعیت بهتر", data.better, (better) => updateData({ better }), 5, undefined, "به تغییری فکر کنید که مردم بتوانند در زندگی روزمره ببینند؛ چه چیزی کمتر، بیشتر یا آسان‌تر می‌شود؟", "فرض کنید این مسئله بهتر شده است. مهم‌ترین تغییری که مردم واقعاً متوجه آن می‌شوند چیست؟")}
               <button className="subtle-button structured-example-button" type="button" onClick={() => setShowExample(!showExample)} aria-expanded={showExample}>
                 <Eye size={16} aria-hidden="true" /> {showExample ? "بستن مثال" : "مشاهدهٔ مثال"}
               </button>
@@ -384,7 +981,7 @@ export default function StructuredRegistrationForm({
           {currentStep === "action" && (
             <div className="structured-step-content">
               <p>به‌نظر شما چه فرد، گروه یا مجموعه‌ای باید چه کاری را متفاوت انجام دهد تا این مسئله بهتر شود؟</p>
-              {textArea("registration-action", "تغییر یا اقدام پیشنهادی", data.action, (action) => updateData({ action }), 5)}
+              {textArea("registration-action", "تغییر یا اقدام پیشنهادی", data.action, (action) => updateData({ action }), 5, undefined, "مشخص کنید چه کسی قرار است چه کاری انجام دهد و این کار چطور به بهترشدن وضعیت کمک می‌کند.", "به‌نظر شما چه فرد، گروه یا مجموعه‌ای باید چه کاری را متفاوت انجام دهد تا این مسئله بهتر شود؟")}
               <button className="subtle-button structured-example-button" type="button" onClick={() => setShowExample(!showExample)} aria-expanded={showExample}>
                 <Eye size={16} aria-hidden="true" /> {showExample ? "بستن مثال" : "مشاهدهٔ مثال"}
               </button>
@@ -396,7 +993,7 @@ export default function StructuredRegistrationForm({
             <div className="structured-step-content">
               <p>از توضیحتان مشخص است چه کسی باید چه کاری را نسبت به امروز متفاوت انجام دهد؟ پاسخ فعلی بدون تغییر باقی می‌ماند، مگر اینکه خودتان ویرایشش کنید.</p>
               {radioOptions("مرور پاسخ پیشنهادی", ["کمی دقیق‌ترش می‌کنم", "با همین پاسخ ادامه می‌دهم"], data.refine === "more" ? "کمی دقیق‌ترش می‌کنم" : data.refine === "keep" ? "با همین پاسخ ادامه می‌دهم" : "", (value) => updateData({ refine: value === "کمی دقیق‌ترش می‌کنم" ? "more" : "keep" }))}
-              {data.refine === "more" && textArea("registration-action-refine", "پاسخ پیشنهادی؛ در صورت تمایل ویرایش کنید", data.action, (action) => updateData({ action }), 5)}
+              {data.refine === "more" && textArea("registration-action-refine", "پاسخ پیشنهادی؛ در صورت تمایل ویرایش کنید", data.action, (action) => updateData({ action }), 5, undefined, "اگر پاسخ را ویرایش می‌کنید، روشن کنید چه کسی چه تغییری ایجاد می‌کند.", "از توضیحتان مشخص است چه کسی باید چه کاری را نسبت به امروز متفاوت انجام دهد؟")}
             </div>
           )}
 
@@ -496,8 +1093,7 @@ export default function StructuredRegistrationForm({
             </button>
           </form>
           {currentStep === "intro" && <p className="structured-draft-note"><FileText size={15} aria-hidden="true" /> پیش‌نویس به‌صورت خودکار و محلی ذخیره می‌شود.</p>}
-        </>
-      )}
+      </>
     </section>
   );
 }
