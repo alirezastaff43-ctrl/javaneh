@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Clock3, Eye, FileText } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CircleHelp, Clock3, LoaderCircle } from "lucide-react";
 import MentorGuidedTextarea, { type MentorGuidedTextareaHandle } from "./mentor-guided-textarea";
 import { SpeechEnabledTextarea } from "./speech-input-control";
 import {
@@ -14,7 +14,9 @@ import {
   PLACES,
   PROVINCES,
   STEP_TITLES,
+  awardStructuredPoints,
   countWords,
+  structuredScore,
   validateRegistrationStep,
   visibleRegistrationSteps,
   type RegistrationStep,
@@ -22,9 +24,11 @@ import {
   type StructuredRegistrationData,
   type WorkbookAnswerValue,
   type WorkbookAnswers,
+  type WorkbookFollowup,
   type WorkbookFlow,
   type WorkbookListItem,
 } from "@/lib/structured-registration";
+import { formatNumber, isPersianText, toPersianDigits } from "@/lib/locale";
 import {
   WORKBOOKS,
   WORKBOOK_FLOW_ORDER,
@@ -37,6 +41,7 @@ import {
   validateWorkbookPage,
   type WorkbookField,
   type WorkbookOption,
+  type WorkbookPage,
 } from "@/lib/workbook-forms";
 
 type Props = {
@@ -51,6 +56,9 @@ const otherOutcome = OUTCOMES[6];
 const unsureOutcome = OUTCOMES[7];
 const otherGroup = BENEFICIARY_GROUPS[7];
 const unsureGroup = BENEFICIARY_GROUPS[8];
+const SCOREABLE_INITIAL_STEPS: RegistrationStep[] = [
+  "problem", "place", "better", "action", "refine", "outcomes", "groups", "axis", "title",
+];
 
 function lockWorkbooks(
   workbooks: StructuredRegistration["workbooks"],
@@ -97,8 +105,7 @@ export default function StructuredRegistrationForm({
   onSubmit,
 }: Props) {
   const [error, setError] = useState("");
-  const [showExample, setShowExample] = useState(false);
-  const [acceptedLocalSave, setAcceptedLocalSave] = useState(false);
+  const [acceptedReview, setAcceptedReview] = useState(false);
   const guidedAnswerRef = useRef<MentorGuidedTextareaHandle>(null);
   const data = registration.data;
   const steps = visibleRegistrationSteps(data);
@@ -126,11 +133,23 @@ export default function StructuredRegistrationForm({
     onBack,
   }: WorkbookJourneyProps) {
     const [error, setError] = useState("");
+    const [followupBusy, setFollowupBusy] = useState(false);
+    const [followupSpeechBusy, setFollowupSpeechBusy] = useState(false);
+    const [followupRetry, setFollowupRetry] = useState(false);
+    const currentRegistration = useRef(registration);
+    currentRegistration.current = registration;
     const guidedAnswerRef = useRef<MentorGuidedTextareaHandle>(null);
 
     function update(patch: Partial<StructuredRegistration>) {
-      onChange({ ...registration, ...patch, updatedAt: new Date().toISOString() });
+      const updated = {
+        ...currentRegistration.current,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      };
+      currentRegistration.current = updated;
+      onChange(updated);
       setError("");
+      setFollowupRetry(false);
     }
 
     function startFlow(flow: WorkbookFlow) {
@@ -168,7 +187,7 @@ export default function StructuredRegistrationForm({
           <div className="eyebrow"><span className="eyebrow-line" />ادامهٔ ثبت ایده</div>
           <h1 id="structured-title">{registration.data.title.trim() || "مسیر تکمیل ایده"}</h1>
           <p className="form-intro">
-            فرم اولیه در این مرورگر ذخیره شده است. کارویژه‌ها را به‌ترتیب تکمیل کنید؛ اطلاعات به سامانهٔ برگزارکننده ارسال نمی‌شود.
+            ثبت اولیهٔ ایده تکمیل شده است. کارویژه‌ها را به‌ترتیب تکمیل کنید؛ پاسخ‌ها برای برگزارکننده ارسال نمی‌شوند. امتیاز فعلی: {formatNumber(structuredScore(registration))}
           </p>
           <div className="workbook-list">
             <article className="workbook-card">
@@ -212,10 +231,6 @@ export default function StructuredRegistrationForm({
               );
             })}
           </div>
-          <p className="structured-draft-note">
-            <FileText size={15} aria-hidden="true" />
-            پاسخ‌ها و پیشرفت کارویژه‌ها فقط در فضای ذخیره‌سازی همین مرورگر نگهداری می‌شوند.
-          </p>
           {storageError && <p className="inline-error" role="alert">{storageError}</p>}
         </section>
       );
@@ -228,14 +243,65 @@ export default function StructuredRegistrationForm({
     const pages = WORKBOOKS[flow].pages;
     const progressPercent = Math.round(((pageIndex + 1) / pages.length) * 100);
 
+    function recordPageScore(sufficient: boolean) {
+      const current = currentRegistration.current;
+      let scored = awardStructuredPoints(current, `workbook:${flow}:${page.id}:base`, 2);
+      if (sufficient)
+        scored = awardStructuredPoints(scored, `workbook:${flow}:${page.id}:bonus`, 1);
+      if (scored !== current) update({ scoreAwards: scored.scoreAwards });
+    }
+
+    async function mentorApprovesFollowup(followup: WorkbookFollowup): Promise<boolean> {
+      try {
+        const answer = [
+          `پاسخ اصلی: ${followup.sourceAnswer}`,
+          ...followup.questions.map((question, index) =>
+            `${question}\n${followup.answers[index] ?? ""}`,
+          ),
+        ].join("\n\n");
+        const response = await fetch("/api/mentor/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            purpose: "workbook-followup",
+            messages: [{
+              role: "user",
+              content: JSON.stringify({
+                ideaContext: registrationMentorContext(currentRegistration.current).slice(0, 800),
+                workbook: WORKBOOKS[flow].title,
+                page: page.title,
+                guide: page.guide,
+                question: page.question,
+                answer: answer.slice(0, 3000),
+              }),
+            }],
+            ideas: [],
+          }),
+        });
+        const payload: unknown = await response.json();
+        return Boolean(
+          response.ok && payload && typeof payload === "object" &&
+          "status" in payload && payload.status === "sufficient" &&
+          "questions" in payload && Array.isArray(payload.questions) &&
+          payload.questions.length === 0,
+        );
+      } catch {
+        return false;
+      }
+    }
+
     function updateAnswers(key: string, value: WorkbookAnswerValue) {
-      const current = registration.workbooks[flow];
+      const latest = currentRegistration.current;
+      const current = latest.workbooks[flow];
       const changed = JSON.stringify(current.answers[key]) !== JSON.stringify(value);
-      const nextWorkbooks = { ...registration.workbooks };
+      const nextWorkbooks = { ...latest.workbooks };
+      const followups = { ...current.followups };
+      if (changed) delete followups[page.id];
       nextWorkbooks[flow] = {
         ...current,
         status: changed ? "draft" : current.status,
         answers: { ...current.answers, [key]: value },
+        followups,
       };
       if (changed && current.status === "submitted") {
         const currentIndex = WORKBOOK_FLOW_ORDER.indexOf(flow);
@@ -250,6 +316,34 @@ export default function StructuredRegistrationForm({
       update({ workbooks: nextWorkbooks });
     }
 
+    function updateFollowup(pageId: string, followup?: WorkbookFollowup): WorkbookProgress {
+      const latest = currentRegistration.current;
+      const current = latest.workbooks[flow];
+      const nextFollowups = { ...current.followups };
+      if (followup) nextFollowups[pageId] = followup;
+      else delete nextFollowups[pageId];
+      if (JSON.stringify(current.followups) === JSON.stringify(nextFollowups)) return current;
+
+      const updatedProgress = {
+        ...current,
+        status: current.status === "submitted" || current.status === "available" ? "draft" : current.status,
+        followups: nextFollowups,
+      };
+      const nextWorkbooks = { ...latest.workbooks, [flow]: updatedProgress };
+      if (current.status === "submitted") {
+        const currentIndex = WORKBOOK_FLOW_ORDER.indexOf(flow);
+        for (const laterFlow of WORKBOOK_FLOW_ORDER.slice(currentIndex + 1)) {
+          nextWorkbooks[laterFlow] = {
+            ...nextWorkbooks[laterFlow],
+            status: "locked",
+            step: WORKBOOKS[laterFlow].pages[0].id,
+          };
+        }
+      }
+      update({ workbooks: nextWorkbooks });
+      return updatedProgress;
+    }
+
     function setStep(step: string) {
       update({
         workbooks: {
@@ -260,6 +354,7 @@ export default function StructuredRegistrationForm({
     }
 
     function saveAndReturn() {
+      if (followupSpeechBusy) return;
       update({
         activeFlow: "dashboard",
         workbooks: {
@@ -269,10 +364,10 @@ export default function StructuredRegistrationForm({
       });
     }
 
-    function finishFlow() {
+    function finishFlow(currentProgress = progress) {
       const nextWorkbooks = {
-        ...registration.workbooks,
-        [flow]: { ...progress, status: "submitted" as const, step: page.id },
+        ...currentRegistration.current.workbooks,
+        [flow]: { ...currentProgress, status: "submitted" as const, step: page.id },
       };
       const currentIndex = WORKBOOK_FLOW_ORDER.indexOf(flow);
       const nextFlow = WORKBOOK_FLOW_ORDER[currentIndex + 1];
@@ -282,8 +377,22 @@ export default function StructuredRegistrationForm({
       update({ activeFlow: "dashboard", workbooks: nextWorkbooks });
     }
 
+    function advancePage(currentProgress = progress) {
+      if (pageIndex === pages.length - 1) {
+        finishFlow(currentProgress);
+        return;
+      }
+      update({
+        workbooks: {
+          ...currentRegistration.current.workbooks,
+          [flow]: { ...currentProgress, step: pages[pageIndex + 1].id },
+        },
+      });
+    }
+
     async function goNext(event: React.FormEvent<HTMLFormElement>) {
       event.preventDefault();
+      if (followupBusy || followupSpeechBusy) return;
       if (page.kind === "questions") {
         const validation = validateWorkbookPage(page, progress.answers);
         if (validation) {
@@ -293,14 +402,147 @@ export default function StructuredRegistrationForm({
         const guidedReady = await guidedAnswerRef.current?.review();
         if (guidedReady === false) return;
       }
-      if (page.kind === "summary" || pageIndex === pages.length - 1) {
+      if (page.kind === "summary") {
         finishFlow();
         return;
       }
-      setStep(pages[pageIndex + 1].id);
+      if (page.kind !== "questions") {
+        advancePage();
+        return;
+      }
+
+      const sourceAnswer = workbookPageAnswer(page, progress.answers);
+      const savedFollowup = progress.followups[page.id];
+      if (savedFollowup?.sourceAnswer === sourceAnswer) {
+        if (savedFollowup.status === "sufficient") {
+          recordPageScore(true);
+          advancePage();
+          return;
+        }
+        if (savedFollowup.index === savedFollowup.questions.length) {
+          setFollowupBusy(true);
+          const sufficient = await mentorApprovesFollowup(savedFollowup);
+          setFollowupBusy(false);
+          recordPageScore(sufficient);
+          advancePage();
+          return;
+        }
+        const answer = savedFollowup.draft.trim();
+        if (!answer) {
+          setError("پاسخی بنویسید یا گزینهٔ «هنوز مطمئن نیستم» را انتخاب کنید.");
+          return;
+        }
+        const completedFollowup = {
+          ...savedFollowup,
+          answers: [...savedFollowup.answers, answer],
+          index: savedFollowup.index + 1,
+          draft: "",
+        };
+        const updatedProgress = {
+          ...progress,
+          followups: { ...progress.followups, [page.id]: completedFollowup },
+        };
+        if (completedFollowup.index === completedFollowup.questions.length) {
+          setFollowupBusy(true);
+          const sufficient = await mentorApprovesFollowup(completedFollowup);
+          setFollowupBusy(false);
+          recordPageScore(sufficient);
+          advancePage(updatedProgress);
+        } else {
+          update({ workbooks: { ...currentRegistration.current.workbooks, [flow]: updatedProgress } });
+        }
+        return;
+      }
+
+      setFollowupBusy(true);
+      setFollowupRetry(false);
+      setError("");
+      const previousAnswers = pages
+        .slice(Math.max(1, pageIndex - 3), pageIndex)
+        .map((previousPage) => {
+          const answers: Array<[string, string]> = (previousPage.fields ?? [])
+            .flatMap((field) => formatFieldAnswers(field, progress.answers, false))
+            .filter(([, answer]) => answer.trim())
+            .map(([label, answer]) => [label, answer.slice(0, 250)]);
+          const previousFollowup = progress.followups[previousPage.id];
+          if (previousFollowup) {
+            previousFollowup.questions.slice(0, previousFollowup.index).forEach((question, index) => {
+              const answer = previousFollowup.answers[index];
+              if (answer) answers.push([`پرسش تکمیلی: ${question}`, answer.slice(0, 250)]);
+            });
+          }
+          return {
+            title: previousPage.title,
+            answers: answers.slice(-2),
+          };
+        })
+        .filter(({ answers }) => answers.length > 0);
+      try {
+        const response = await fetch("/api/mentor/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            purpose: "workbook-followup",
+            messages: [{
+              role: "user",
+              content: JSON.stringify({
+                ideaContext: registrationMentorContext(registration).slice(0, 800),
+                workbook: WORKBOOKS[flow].title,
+                page: page.title,
+                guide: page.guide,
+                question: page.question,
+                answer: sourceAnswer.slice(0, 1500),
+                previousAnswers,
+              }),
+            }],
+            ideas: [],
+          }),
+        });
+        if (!response.ok) throw new Error("Follow-up request failed");
+        const payload: unknown = await response.json();
+        if (
+          !payload || typeof payload !== "object" ||
+          !("status" in payload) ||
+          (payload.status !== "needs-more" && payload.status !== "sufficient") ||
+          !("reply" in payload) || typeof payload.reply !== "string" ||
+          !("questions" in payload) || !Array.isArray(payload.questions) ||
+          (payload.status === "needs-more" && (payload.questions.length < 1 || payload.questions.length > 3)) ||
+          (payload.status === "sufficient" && payload.questions.length !== 0) ||
+          !isPersianText(payload.reply) || /[؟?]/u.test(payload.reply) ||
+          payload.questions.some((question) =>
+            typeof question !== "string" || question.length > 600 ||
+            !isPersianText(question) || (question.match(/[؟?]/gu) ?? []).length !== 1 ||
+            !/[؟?]$/u.test(question),
+          ) ||
+          new Set(payload.questions.map((question) =>
+            (question as string).toLocaleLowerCase("fa").replace(/[\s؟?.,؛;:!]+/gu, ""),
+          )).size !== payload.questions.length
+        ) throw new Error("Invalid follow-up response");
+
+        const latest = currentRegistration.current;
+        const latestProgress = latest.workbooks[flow];
+        if (latest.activeFlow !== flow || workbookPageAnswer(page, latestProgress.answers) !== sourceAnswer) return;
+        const updatedProgress = updateFollowup(page.id, {
+          status: payload.status,
+          sourceAnswer,
+          reply: payload.reply,
+          questions: payload.questions as string[],
+          answers: [],
+          index: 0,
+          draft: "",
+        });
+        recordPageScore(payload.status === "sufficient");
+        if (payload.status === "sufficient") advancePage(updatedProgress);
+      } catch {
+        setFollowupRetry(true);
+        setError("پرسش‌های فرعی آماده نشدند. پاسخ اصلی ذخیره شده است؛ دوباره تلاش کنید.");
+      } finally {
+        setFollowupBusy(false);
+      }
     }
 
     function goPrevious() {
+      if (followupBusy || followupSpeechBusy) return;
       setError("");
       if (pageIndex === 0) {
         update({ activeFlow: "dashboard" });
@@ -351,7 +593,7 @@ export default function StructuredRegistrationForm({
               ? [option.value]
               : [...current.filter((item) => !field.options.find((itemOption) => itemOption.value === item)?.exclusive), option.value];
           if (field.maximum && next.length > field.maximum) {
-            setError(`حداکثر ${field.maximum} گزینه را انتخاب کنید.`);
+            setError(`حداکثر ${formatNumber(field.maximum)} گزینه را انتخاب کنید.`);
             return;
           }
           updateAnswers(field.key, next);
@@ -460,7 +702,7 @@ export default function StructuredRegistrationForm({
               <div className="workbook-list-item" key={`${field.key}-${index}`}>
                 <SpeechEnabledTextarea
                   id={`workbook-${field.key}-${index}`}
-                  label={`${field.label} ${new Intl.NumberFormat("fa-IR").format(index + 1)}`}
+                  label={`${field.label} ${formatNumber(index + 1)}`}
                   value={item.text}
                   onChange={(answer) => nextItems({ text: answer })}
                   rows={3}
@@ -478,7 +720,7 @@ export default function StructuredRegistrationForm({
                 )}
                 {field.choices && (
                   <fieldset className="structured-fieldset">
-                    <legend>{field.label} {new Intl.NumberFormat("fa-IR").format(index + 1)}: وضعیت</legend>
+                    <legend>{field.label} {formatNumber(index + 1)}: وضعیت</legend>
                     <div className="structured-options">
                       {field.choices.map((choice) => (
                         <label className="structured-choice" key={choice}>
@@ -525,18 +767,33 @@ export default function StructuredRegistrationForm({
       );
     }
 
+    const currentSourceAnswer = workbookPageAnswer(page, progress.answers);
+    const savedPageFollowup = progress.followups[page.id];
+    const activeFollowup = savedPageFollowup?.status === "needs-more" &&
+      savedPageFollowup.sourceAnswer === currentSourceAnswer &&
+      savedPageFollowup.index < savedPageFollowup.questions.length
+      ? savedPageFollowup
+      : undefined;
+
     function reviewRows() {
       return WORKBOOKS[flow].pages
         .filter((item) => item.kind === "questions")
         .map((item) => ({
           page: item,
-          answers: (item.fields ?? []).flatMap((field) => formatFieldAnswers(field, progress.answers)),
+          answers: [
+            ...(item.fields ?? []).flatMap((field) => formatFieldAnswers(field, progress.answers, flow !== "C")),
+            ...(progress.followups[item.id]?.questions ?? [])
+              .map((question, index): [string, string] => [
+                `پرسش تکمیلی: ${question}`,
+                progress.followups[item.id].answers[index] ?? "",
+              ]),
+          ],
         }));
     }
 
     return (
       <section className="form-view structured-view" aria-labelledby="workbook-title">
-        <button className="back-link" type="button" onClick={goPrevious}>
+        <button className="back-link" type="button" onClick={goPrevious} disabled={followupBusy || followupSpeechBusy}>
           <ArrowLeft size={16} aria-hidden="true" />
           {pageIndex === 0 ? "بازگشت به کارویژه‌ها" : "مرحلهٔ قبل"}
         </button>
@@ -546,9 +803,9 @@ export default function StructuredRegistrationForm({
             <h1 id="workbook-title">{page.title}</h1>
             <p className="form-intro">{page.question}</p>
           </div>
-          <span className="step-count" aria-label={`گام ${pageIndex + 1} از ${pages.length}`}>
-            {new Intl.NumberFormat("fa-IR").format(pageIndex + 1)}
-            <span> از {new Intl.NumberFormat("fa-IR").format(pages.length)}</span>
+          <span className="step-count" aria-label={`گام ${formatNumber(pageIndex + 1)} از ${formatNumber(pages.length)}`}>
+            {formatNumber(pageIndex + 1)}
+            <span> از {formatNumber(pages.length)}</span>
           </span>
         </div>
         <div
@@ -563,12 +820,55 @@ export default function StructuredRegistrationForm({
         </div>
         <div className="structured-step-content">
           {page.guide && <p>{page.guide}</p>}
-          {page.kind === "questions" && (page.fields ?? []).map(renderField)}
-          {page.example && (
-            <details className="workbook-example">
-              <summary>{page.exampleLabel ?? "مشاهدهٔ مثال"}</summary>
-              <p>{page.example}</p>
-            </details>
+          {page.kind === "questions" && !activeFollowup && (page.fields ?? []).map(renderField)}
+          {activeFollowup && (
+            <section className="question-card workbook-followup-card" aria-label="پرسش تکمیلی">
+              <div className="workbook-followup-reply" aria-live="polite">
+                <span className="mentor-label">همراهی دربارهٔ ایده</span>
+                <p>{toPersianDigits(activeFollowup.reply)}</p>
+              </div>
+              <div className="workbook-followup-heading">
+                <CircleHelp size={22} aria-hidden="true" />
+                <div>
+                  <span className="question-kicker">
+                    پرسش {formatNumber(activeFollowup.index + 1)} از {formatNumber(activeFollowup.questions.length)}
+                  </span>
+                  <h2 aria-live="polite" aria-atomic="true">{toPersianDigits(activeFollowup.questions[activeFollowup.index])}</h2>
+                </div>
+              </div>
+              <p className="review-hint" dir="auto">پاسخ اصلی: {currentSourceAnswer}</p>
+              <SpeechEnabledTextarea
+                id={`workbook-followup-${page.id}`}
+                label="پاسخ شما"
+                value={activeFollowup.draft}
+                onChange={(draft) => updateFollowup(page.id, { ...activeFollowup, draft })}
+                rows={4}
+                maxLength={1500}
+                onBusyChange={setFollowupSpeechBusy}
+              />
+              <div className="answer-tools">
+                <button
+                  type="button"
+                  className="subtle-button"
+                  disabled={followupSpeechBusy}
+                  onClick={() => updateFollowup(page.id, {
+                    ...activeFollowup,
+                    draft: "هنوز مطمئن نیستم. پیش از تصمیم‌گیری می‌خواهم بیشتر بدانم.",
+                  })}
+                >
+                  هنوز مطمئن نیستم <CircleHelp size={15} aria-hidden="true" />
+                </button>
+                <span>{formatNumber(activeFollowup.draft.length)}/۱۵۰۰</span>
+              </div>
+              <button type="button" className="text-button" onClick={() => updateFollowup(page.id)} disabled={followupSpeechBusy}>
+                ویرایش پاسخ اصلی
+              </button>
+            </section>
+          )}
+          {followupBusy && (
+            <p className="workbook-followup-loading" role="status">
+              <LoaderCircle size={16} aria-hidden="true" /> در حال آماده‌کردن پرسش بعدی
+            </p>
           )}
           {page.kind === "summary" && (
             <div className="workbook-review">
@@ -595,17 +895,20 @@ export default function StructuredRegistrationForm({
         {error && <p className="inline-error" role="alert">{error}</p>}
         <form className="structured-actions workbook-actions" onSubmit={goNext} noValidate>
           {page.kind !== "summary" && (
-            <button className="subtle-button" type="button" onClick={saveAndReturn}>ذخیره و بعداً ادامه می‌دهم</button>
+            <button className="subtle-button" type="button" onClick={saveAndReturn} disabled={followupBusy || followupSpeechBusy}>ذخیره و بعداً ادامه می‌دهم</button>
           )}
-          <button className="primary-button" type="submit">
-            {page.nextLabel ?? (pageIndex === pages.length - 1 ? "ثبت پاسخ" : "ادامه")}
+          <button className="primary-button" type="submit" disabled={followupBusy || followupSpeechBusy}>
+            {followupBusy
+              ? "در حال آماده‌سازی"
+              : followupRetry
+                ? "تلاش دوباره"
+                : activeFollowup
+                  ? "ثبت پاسخ و ادامه"
+                  : page.nextLabel ?? (pageIndex === pages.length - 1 ? "ثبت پاسخ" : "ادامه")}
             {page.kind !== "summary" && <ArrowRight size={17} aria-hidden="true" />}
           </button>
         </form>
-        <p className="structured-draft-note">
-          <FileText size={15} aria-hidden="true" />
-          پاسخ‌ها به‌صورت خودکار و محلی ذخیره می‌شوند؛ این فرم برای برگزارکننده ارسال نمی‌شود.
-        </p>
+        <p className="structured-draft-note">پاسخ‌های این کارویژه برای برگزارکننده ارسال نمی‌شوند.</p>
       </section>
     );
   }
@@ -613,22 +916,24 @@ export default function StructuredRegistrationForm({
   function formatFieldAnswers(
     field: WorkbookField,
     answers: WorkbookAnswers,
+    includeNotes = true,
   ): Array<[string, string]> {
     const answer = answers[field.key];
     if (field.type === "long") return [[field.label, readText(answer)]];
     if (field.type === "single") {
       const selected = field.options.find((option) => option.value === answer);
-      const note = readText(answers[`${field.key}Note`]);
+      const note = includeNotes ? readText(answers[`${field.key}Note`]) : "";
       return [[field.label, [selected?.label, note].filter(Boolean).join(" — ")]];
     }
     if (field.type === "multiple") {
       const selected = readStringArray(answer);
       const details = readStringRecord(answers[`${field.key}Details`]);
+      const note = includeNotes ? readText(answers[`${field.key}Note`]) : "";
       const summary = selected.map((value) => {
         const option = field.options.find((item) => item.value === value);
         return [option?.label ?? value, details[value]].filter(Boolean).join(": ");
       }).join("، ");
-      return [[field.label, [summary, readText(answers[`${field.key}Note`])].filter(Boolean).join(" — ")]];
+      return [[field.label, [summary, note].filter(Boolean).join(" — ")]];
     }
     if (field.type === "boxes") {
       if (answers[`${field.key}Unsure`]) return [[field.labels.join("، "), field.unsureLabel ?? "هنوز نمی‌دانم"]];
@@ -639,6 +944,15 @@ export default function StructuredRegistrationForm({
       .map((item) => [item.text, item.detail, item.choice ? `(${item.choice})` : ""].filter(Boolean).join(" — "));
     const noneOptions = readStringArray(answers[`${field.key}None`]);
     return [[field.title ?? field.label, [...items, ...noneOptions].join("؛ ")]];
+  }
+
+  function workbookPageAnswer(page: WorkbookPage, answers: WorkbookAnswers): string {
+    return (page.fields ?? [])
+      .flatMap((field) => formatFieldAnswers(field, answers, false))
+      .filter(([, answer]) => answer.trim())
+      .map(([label, answer]) => `${label}: ${answer}`)
+      .join("\n")
+      .slice(0, 3000);
   }
 
   function updateData(patch: Partial<StructuredRegistrationData>) {
@@ -657,6 +971,7 @@ export default function StructuredRegistrationForm({
 
   async function goNext(event?: React.FormEvent<HTMLFormElement>) {
     event?.preventDefault();
+    let mentorApproved = false;
     if (currentStep !== "review") {
       const validation = validateRegistrationStep(currentStep, data);
       if (validation) {
@@ -665,8 +980,9 @@ export default function StructuredRegistrationForm({
       }
       const guidedReady = await guidedAnswerRef.current?.review();
       if (guidedReady === false) return;
-    } else if (!acceptedLocalSave) {
-      setError("برای ثبت محلی، تأیید ذخیره‌شدن پاسخ‌ها در همین مرورگر را انتخاب کنید.");
+      mentorApproved = guidedReady === true;
+    } else if (!acceptedReview) {
+      setError("برای ثبت نهایی، مرور پاسخ‌ها را تأیید کنید.");
       return;
     }
 
@@ -676,7 +992,15 @@ export default function StructuredRegistrationForm({
       return;
     }
     const next = steps[stepIndex + 1];
-    if (next) onChange({ ...registration, step: next, updatedAt: new Date().toISOString() });
+    if (next) {
+      let updated = { ...registration, step: next, updatedAt: new Date().toISOString() };
+      if (SCOREABLE_INITIAL_STEPS.includes(currentStep)) {
+        updated = awardStructuredPoints(updated, `initial:${currentStep}:base`, 2);
+        if (mentorApproved)
+          updated = awardStructuredPoints(updated, `initial:${currentStep}:bonus`, 1);
+      }
+      onChange(updated);
+    }
   }
 
   function goBack() {
@@ -794,7 +1118,7 @@ export default function StructuredRegistrationForm({
     onValue: (value: string) => void,
     rows = 5,
     describedBy?: string,
-    guidance = "پاسختان را با یک نمونه یا جزئیات مشخص مرتبط با همین سؤال روشن کنید.",
+    guidance = "پاسختان را با جزئیات روشن و مرتبط با همین سؤال کامل کنید.",
     question = label,
   ) {
     return (
@@ -867,7 +1191,7 @@ export default function StructuredRegistrationForm({
   function editStep(step: RegistrationStep) {
     const index = steps.indexOf(step);
     if (index >= 0) {
-      setAcceptedLocalSave(false);
+              setAcceptedReview(false);
       setError("");
       onChange({ ...registration, step, updatedAt: new Date().toISOString() });
     }
@@ -889,14 +1213,14 @@ export default function StructuredRegistrationForm({
               <h1 id="structured-title">{STEP_TITLES[currentStep]}</h1>
               {currentStep === "intro" ? (
                 <p className="form-intro">
-                  با چند پاسخ کوتاه، ایده‌تان را ساختاریافته ثبت کنید. پاسخ‌ها پیش‌نویس می‌شوند و پیش از تأیید نهایی در همین مرورگر می‌مانند.
+                  به پرسش‌ها دقیق و کامل پاسخ دهید؛ پرسش‌های بعدی بر اساس پاسخ‌های شما طراحی می‌شوند. پاسخ‌های کامل و مرتبط پس از تأیید مشاور هوشمند جوانه امتیاز تکمیلی می‌گیرند.
                 </p>
               ) : (
                 <p className="form-intro">پاسخ‌هایتان با رفت‌وبرگشت حفظ می‌شوند و می‌توانید در مرور نهایی آن‌ها را ویرایش کنید.</p>
               )}
             </div>
-            <span className="step-count" aria-label={`مرحله ${stepIndex + 1} از ${steps.length}`}>
-              {new Intl.NumberFormat("fa-IR").format(stepIndex + 1)} <span>از {new Intl.NumberFormat("fa-IR").format(steps.length)}</span>
+            <span className="step-count" aria-label={`مرحله ${formatNumber(stepIndex + 1)} از ${formatNumber(steps.length)}`}>
+              {formatNumber(stepIndex + 1)} <span>از {formatNumber(steps.length)}</span>
             </span>
           </div>
           <div
@@ -912,7 +1236,6 @@ export default function StructuredRegistrationForm({
             <div className="structured-step-content">
               <div className="structured-time"><Clock3 size={17} aria-hidden="true" /> زمان تقریبی: ۵ تا ۷ دقیقه</div>
               <p>در این فرم مسئله‌ای را که دیده‌اید، تغییر پیشنهادی و پیامدهای مورد انتظار را با واژه‌های خودتان می‌نویسید. هیچ محوری از پیش انتخاب نشده و عنوان را هم خودتان تعیین می‌کنید.</p>
-              <p className="structured-muted">اطلاعات فرم در مرورگر شما ذخیره می‌شود؛ با پاک‌شدن داده‌های مرورگر ممکن است برای همیشه از دست برود.</p>
             </div>
           )}
 
@@ -926,7 +1249,7 @@ export default function StructuredRegistrationForm({
 
           {currentStep === "contact" && (
             <div className="structured-step-content">
-              <p>نام و محل سکونت برای نگهداری این ثبت در همین مرورگر استفاده می‌شود. شمارهٔ تلفن یا کد ملی دریافت نمی‌کنیم.</p>
+              <p>برای تکمیل این بخش، نام و محل سکونت را وارد کنید. شمارهٔ تلفن یا کد ملی دریافت نمی‌کنیم.</p>
               <div className="structured-fields">
                 {fieldInput("registration-name", "نام و نام خانوادگی", data.fullName, (fullName) => updateData({ fullName }), { maxLength: 80, autoComplete: "name" })}
                 {fieldInput("registration-email", "نشانی ایمیل", data.email, (email) => updateData({ email }), { type: "email", maxLength: 120, optional: true, autoComplete: "email" })}
@@ -952,10 +1275,10 @@ export default function StructuredRegistrationForm({
 
           {currentStep === "problem" && (
             <div className="structured-step-content">
-              <p>یک نمونهٔ واقعی از چیزی که خودتان دیده‌اید یا تجربه کرده‌اید تعریف کنید. لازم نیست رسمی یا تخصصی بنویسید؛ همان‌طور بنویسید که برای دوستی تعریف می‌کنید.</p>
+              <p>مسئله‌ای را که خودتان دیده‌اید یا تجربه کرده‌اید با واژه‌های خودتان شرح دهید؛ لازم نیست رسمی یا تخصصی بنویسید.</p>
               {textArea("registration-problem", "چه مسئله‌ای را می‌توان بهتر کرد؟", data.problem, (problem) => updateData({ problem }), 7, "problem-guide problem-count", "یک موقعیت واقعی را توصیف کنید: چه اتفاقی می‌افتد، برای چه کسانی و در چه شرایطی؟")}
-              <div className="structured-field-hint" id="problem-guide">برای نمونه: هر روز مقدار زیادی غذای سالم در محل کار دور ریخته می‌شود. یا بسیاری از سالمندان محله برای کارهای اینترنتی روزمره به کمک دسترسی ندارند.</div>
-              <div className="structured-field-hint" id="problem-count" aria-live="polite">{new Intl.NumberFormat("fa-IR").format(countWords(data.problem))} واژه</div>
+              <div className="structured-field-hint" id="problem-guide">روشن کنید چه اتفاقی می‌افتد، چه کسانی درگیرند و مسئله در چه شرایطی رخ می‌دهد.</div>
+              <div className="structured-field-hint" id="problem-count" aria-live="polite">{formatNumber(countWords(data.problem))} واژه</div>
             </div>
           )}
 
@@ -971,10 +1294,6 @@ export default function StructuredRegistrationForm({
             <div className="structured-step-content">
               <p>فرض کنید این مسئله بهتر شده است. مهم‌ترین تغییری که مردم واقعاً متوجه آن می‌شوند چیست؟</p>
               {textArea("registration-better", "تصویر وضعیت بهتر", data.better, (better) => updateData({ better }), 5, undefined, "به تغییری فکر کنید که مردم بتوانند در زندگی روزمره ببینند؛ چه چیزی کمتر، بیشتر یا آسان‌تر می‌شود؟", "فرض کنید این مسئله بهتر شده است. مهم‌ترین تغییری که مردم واقعاً متوجه آن می‌شوند چیست؟")}
-              <button className="subtle-button structured-example-button" type="button" onClick={() => setShowExample(!showExample)} aria-expanded={showExample}>
-                <Eye size={16} aria-hidden="true" /> {showExample ? "بستن مثال" : "مشاهدهٔ مثال"}
-              </button>
-              {showExample && <p className="structured-example">مثلاً دورریز غذا کاهش می‌یابد و غذای باقی‌مانده در زمان مناسب به افراد نیازمند می‌رسد.</p>}
             </div>
           )}
 
@@ -982,10 +1301,6 @@ export default function StructuredRegistrationForm({
             <div className="structured-step-content">
               <p>به‌نظر شما چه فرد، گروه یا مجموعه‌ای باید چه کاری را متفاوت انجام دهد تا این مسئله بهتر شود؟</p>
               {textArea("registration-action", "تغییر یا اقدام پیشنهادی", data.action, (action) => updateData({ action }), 5, undefined, "مشخص کنید چه کسی قرار است چه کاری انجام دهد و این کار چطور به بهترشدن وضعیت کمک می‌کند.", "به‌نظر شما چه فرد، گروه یا مجموعه‌ای باید چه کاری را متفاوت انجام دهد تا این مسئله بهتر شود؟")}
-              <button className="subtle-button structured-example-button" type="button" onClick={() => setShowExample(!showExample)} aria-expanded={showExample}>
-                <Eye size={16} aria-hidden="true" /> {showExample ? "بستن مثال" : "مشاهدهٔ مثال"}
-              </button>
-              {showExample && <p className="structured-example">مثلاً فروشگاه‌ها مواد غذایی نزدیک به تاریخ انقضا را در بخش مشخصی با تخفیف عرضه کنند تا پیش از خراب‌شدن مصرف شوند.</p>}
             </div>
           )}
 
@@ -1076,8 +1391,8 @@ export default function StructuredRegistrationForm({
               </dl>
               <p className="structured-terms-note">متن شرایط رویداد در این نسخه مقصد واقعی ندارد؛ پیوند ساختگی نمایش داده نمی‌شود.</p>
               <label className="structured-choice structured-consent">
-                <input type="checkbox" checked={acceptedLocalSave} onChange={(event) => { setAcceptedLocalSave(event.target.checked); setError(""); }} />
-                <span>پاسخ‌ها را مرور کرده‌ام و با ذخیرهٔ آن‌ها در همین مرورگر موافقم.</span>
+                <input type="checkbox" checked={acceptedReview} onChange={(event) => { setAcceptedReview(event.target.checked); setError(""); }} />
+                <span>پاسخ‌ها را مرور کرده‌ام و ثبت نهایی را تأیید می‌کنم.</span>
               </label>
             </div>
           )}
@@ -1089,10 +1404,9 @@ export default function StructuredRegistrationForm({
               <button className="subtle-button" type="button" onClick={skipStep}>ردکردن این مرحله</button>
             )}
             <button className="primary-button" type="submit">
-              {currentStep === "review" ? <><Check size={17} aria-hidden="true" /> ثبت در همین مرورگر</> : <>ادامه <ArrowRight size={17} aria-hidden="true" /></>}
+              {currentStep === "review" ? <><Check size={17} aria-hidden="true" /> ثبت نهایی</> : <>ادامه <ArrowRight size={17} aria-hidden="true" /></>}
             </button>
           </form>
-          {currentStep === "intro" && <p className="structured-draft-note"><FileText size={15} aria-hidden="true" /> پیش‌نویس به‌صورت خودکار و محلی ذخیره می‌شود.</p>}
       </>
     </section>
   );

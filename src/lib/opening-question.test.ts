@@ -11,7 +11,7 @@ describe("opening question", () => {
 
     expect(opening.question).toContain(seed);
     expect(opening.question).toMatch(/[؟?]/u);
-    expect(opening.questionContext).toContain("برای نمونه");
+    expect(opening.questionContext).not.toContain("برای نمونه");
     expect(isValidOpeningQuestion(opening)).toBe(true);
   });
 

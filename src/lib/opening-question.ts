@@ -17,7 +17,7 @@ export function createDemoOpeningQuestion(seed: string): OpeningQuestion {
   return {
     question: `وقتی به «${safeSeed}» فکر می‌کنی، کدام موقعیت مشخص آن برایت مهم‌تر است؟`,
     questionContext:
-      "برای نمونه، می‌توانی از زمان، مکان یا فردی بگویی که این مسئله را در تجربهٔ روزمره‌اش می‌بیند.",
+      "به زمان، مکان یا افراد درگیر توجه کن تا مسئله را در موقعیت مشخص‌تری بررسی کنیم.",
   };
 }
 

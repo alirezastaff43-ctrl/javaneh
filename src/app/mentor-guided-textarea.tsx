@@ -10,6 +10,7 @@ import {
   type FormEvent,
 } from "react";
 import { ArrowRight, LoaderCircle } from "lucide-react";
+import { formatNumber, toPersianDigits } from "@/lib/locale";
 import { SpeechEnabledTextarea } from "./speech-input-control";
 
 type MentorMessage = { role: "user" | "assistant"; content: string };
@@ -231,12 +232,12 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
           {guidePreview?.reflection && (
             <div className="mentor-guidance-section">
               <span className="mentor-guidance-heading">برداشت من از حرف‌هایت</span>
-              <p className="mentor-guidance-reflection">{guidePreview.reflection}</p>
+              <p className="mentor-guidance-reflection">{toPersianDigits(guidePreview.reflection)}</p>
             </div>
           )}
           <div className="mentor-guidance-section">
             <span className="mentor-guidance-heading">در این سؤال توضیح بده</span>
-            <p>{guidePreview?.guidance ?? guide}</p>
+            <p>{toPersianDigits(guidePreview?.guidance ?? guide)}</p>
           </div>
         </div>
         <SpeechEnabledTextarea
@@ -252,18 +253,18 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
         {mentorReply && (
           <div className={`mentor-answer-feedback${status === "accepted" ? " is-accepted" : ""}`} role="status" aria-live="polite">
             <span className="mentor-label">منتور</span>
-            <p>{mentorReply}</p>
+            <p>{toPersianDigits(mentorReply)}</p>
           </div>
         )}
         {status === "needs-more" && (
           <form className="mentor-followup" onSubmit={(event) => void submitFollowup(event)}>
             {currentQuestion && (
               <div className="mentor-followup-question">
-                <p>{currentQuestion.question}</p>
-                <p className="mentor-followup-explanation">{currentQuestion.explanation}</p>
+                <p>{toPersianDigits(currentQuestion.question)}</p>
+                <p className="mentor-followup-explanation">{toPersianDigits(currentQuestion.explanation)}</p>
                 {questions.length > 1 && (
                   <span className="mentor-followup-count">
-                    پرسش {new Intl.NumberFormat("fa-IR").format(questionIndex + 1)} از {new Intl.NumberFormat("fa-IR").format(questions.length)}
+                    پرسش {formatNumber(questionIndex + 1)} از {formatNumber(questions.length)}
                   </span>
                 )}
               </div>

@@ -64,8 +64,27 @@ describe("Persian interview questions", () => {
 
     expect(decision.mentorMessage).toContain("چراغ پارک شب‌ها خاموش می‌ماند");
     expect(decision.nextQuestion).toContain(request.seed);
-    expect(decision.questionContext).toContain("برای نمونه");
+    expect(decision.questionContext).not.toContain("برای نمونه");
     expect(validateInterviewDecision(decision, request)).toBe(true);
+  });
+
+  it("awards mentor sufficiency only to detailed demo answers", () => {
+    const axes = axesForStage("initial");
+    const request: InterviewRequest = {
+      seed: "A community issue",
+      stage: "initial",
+      section: axes[0].section,
+      index: 0,
+      question: axes[0].question,
+      answer: "در مسیر مدرسه، چند بار دیدم که بچه‌ها از خیابان شلوغ عبور می‌کنند.",
+      answeredSections: [axes[0].section],
+      skippedSections: [],
+      remainingSections: axes.slice(1).map((axis) => axis.section),
+      history: [],
+    };
+
+    expect(createDemoDecision(request).answerSufficient).toBe(true);
+    expect(createDemoDecision({ ...request, answer: "این مشکل مهم است." }).answerSufficient).toBe(false);
   });
 
   it("personalizes the first development question using the latest intake answer", () => {
@@ -141,6 +160,7 @@ describe("Persian interview questions", () => {
     };
     const decision = {
       mentorMessage: "نوشتی که سالمندان از پله‌های ورودی گفته‌اند.",
+      answerSufficient: true,
       stageComplete: false,
       coveredSections: [axes[2].section],
       nextSection: axes[3].section,

@@ -106,6 +106,106 @@ describe("mentor chat route", () => {
     expect(providerRequest.messages[0].content).toContain("آن را کافی اعلام نکن");
   });
 
+  it("chooses one to three Persian workbook questions from the given answer and context", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(providerResponse(JSON.stringify({
+      status: "needs-more",
+      reply: "گفتی سالمندان هنگام رفت‌وآمد به بازار با دشواری روبه‌رو می‌شوند.",
+      questions: ["این دشواری بیشتر در کدام بخش مسیر خودش را نشان می‌دهد؟"],
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await chatRequest({
+      purpose: "workbook-followup",
+      messages: [{
+        role: "user",
+        content: JSON.stringify({
+          workbook: "کارویژه اول",
+          question: "این مسئله بیش از همه بر کدام افراد یا گروه‌ها اثر می‌گذارد؟",
+          answer: "سالمندان و خانواده‌هایشان",
+          previousAnswers: "ایده: همراهی سالمندان برای رفت‌وآمد به بازار",
+        }),
+      }],
+      ideas: [],
+    });
+    const result = await response.json();
+    const providerRequest = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    expect(response.status).toBe(200);
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0]).toContain("مسیر");
+    expect(providerRequest.response_format).toEqual({ type: "json_object" });
+    expect(providerRequest.messages[0].content).toContain("تعداد پرسش‌ها باید با پاسخ کاربر متناسب باشد");
+    expect(providerRequest.messages.at(-1).content).toContain("سالمندان و خانواده‌هایشان");
+    expect(providerRequest.messages.at(-1).content).toContain("همراهی سالمندان");
+  });
+
+  it("accepts three distinct workbook follow-up questions", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(providerResponse(JSON.stringify({
+      status: "needs-more",
+      reply: "برای شناخت بهتر تجربهٔ اجرا، چند نکته را روشن می‌کنیم.",
+      questions: [
+        "این تجربه در چه مقیاسی انجام شد؟",
+        "چه کسانی در اجرای آن نقش داشتند؟",
+        "چه چیزی باعث شد آن تجربه ادامه پیدا کند؟",
+      ],
+    }))));
+
+    const response = await chatRequest({
+      purpose: "workbook-followup",
+      messages: [{ role: "user", content: "پاسخ کاربر" }],
+      ideas: [],
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).questions).toHaveLength(3);
+  });
+
+  it("accepts sufficient workbook answers without follow-up questions", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(providerResponse(JSON.stringify({
+      status: "sufficient",
+      reply: "پاسخت هدف و مسیر راهکار را روشن کرده است.",
+      questions: [],
+    }))));
+
+    const response = await chatRequest({
+      purpose: "workbook-followup",
+      messages: [{ role: "user", content: "پاسخ روشن و کامل کاربر" }],
+      ideas: [],
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: "sufficient",
+      reply: "پاسخت هدف و مسیر راهکار را روشن کرده است.",
+      questions: [],
+    });
+  });
+
+  it("rejects malformed, non-Persian, or duplicated workbook questions", async () => {
+    const invalidResponses = [
+      { reply: "یک نکته را روشن کنیم.", questions: [] },
+      { status: "sufficient", reply: "پاسخ کافی است.", questions: ["یک سؤال؟"] },
+      { reply: "یک نکته را روشن کنیم.", questions: ["یک؟", "دو؟", "سه؟", "چهار؟"] },
+      { reply: "یک نکته را روشن کنیم.", questions: ["Where did this happen?"] },
+      {
+        reply: "یک نکته را روشن کنیم.",
+        questions: ["چه کسانی درگیرند؟", "چه کسانی درگیرند؟"],
+      },
+    ];
+
+    for (const invalidResponse of invalidResponses) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(providerResponse(JSON.stringify(invalidResponse))));
+      const response = await chatRequest({
+        purpose: "workbook-followup",
+        messages: [{ role: "user", content: "پاسخ کاربر" }],
+        ideas: [],
+      });
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ code: "invalid_provider_response" });
+    }
+  });
+
   it("returns a two-part form guide grounded in prior answers", async () => {
     const fetchMock = vi.fn().mockResolvedValue(providerResponse(JSON.stringify({
       reflection: "برداشت من این است که سالمندان در رفت‌وآمد روزانه با دشواری روبه‌رو هستند.",

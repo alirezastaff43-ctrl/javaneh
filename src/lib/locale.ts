@@ -5,7 +5,15 @@ export function normalizeDigits(value: string): string {
   });
 }
 
+export function toPersianDigits(value: string): string {
+  return value.replace(/[0-9٠-٩]/g, (digit) => {
+    const code = digit.charCodeAt(0);
+    return String.fromCharCode(code >= 0x0660 ? code - 0x0660 + 0x06f0 : code - 0x30 + 0x06f0);
+  });
+}
+
 export function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) return "نامشخص";
   return new Intl.NumberFormat("fa-IR-u-nu-arabext", {
     maximumFractionDigits: 0,
   }).format(value);

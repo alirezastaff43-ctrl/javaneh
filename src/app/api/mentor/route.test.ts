@@ -30,6 +30,7 @@ function requestBody(overrides: Record<string, unknown> = {}) {
 function validDecision() {
   return {
     mentorMessage: "ممنون که این را با من در میان گذاشتی.",
+    answerSufficient: true,
     stageComplete: false,
     coveredSections: [],
     nextSection: INTAKE_AXES[2].section,
@@ -250,6 +251,7 @@ describe("adaptive interview route", () => {
       providerResponse(
         JSON.stringify({
           mentorMessage: "نوشتی که می‌خواهی این موضوع را بیشتر بررسی کنی.",
+          answerSufficient: true,
           stageComplete: false,
           coveredSections: [],
           nextSection: DEVELOPMENT_AXES[1].section,
@@ -335,6 +337,7 @@ describe("adaptive interview route", () => {
       providerResponse(
         JSON.stringify({
           mentorMessage: "ممنون از توضیحت.",
+          answerSufficient: true,
           stageComplete: false,
           coveredSections: [],
           nextSection: axes[3].section,

@@ -155,6 +155,7 @@ export function developmentOpeningQuestion(
 
 export type InterviewDecision = {
   mentorMessage: string;
+  answerSufficient: boolean;
   stageComplete: boolean;
   coveredSections: string[];
   nextSection: string | null;
@@ -216,6 +217,7 @@ export function validateInterviewDecision(
     result.mentorMessage.trim().length === 0 ||
     result.mentorMessage.length > 240 ||
     !isPersianText(result.mentorMessage) ||
+    typeof result.answerSufficient !== "boolean" ||
     typeof result.stageComplete !== "boolean" ||
     !Array.isArray(result.coveredSections) ||
     result.coveredSections.some((section) => typeof section !== "string") ||
@@ -288,12 +290,16 @@ export function validateInterviewDecision(
 export function createDemoDecision(
   request: InterviewRequest,
 ): InterviewDecision {
+  const answerSufficient =
+    request.answer.trim().length >= 40 &&
+    request.answer.trim().split(/\s+/u).length >= 6;
   const nextSection = request.remainingSections[0];
   if (!nextSection) {
     return {
       mentorMessage: isPersianText(request.seed)
         ? `ایدهٔ اولیه‌ات «${request.seed.trim().slice(0, 45)}${request.seed.trim().length > 45 ? "…" : ""}» و پاسخ‌هایت پایهٔ پیشنهاد هستند. حالا متن برای بازبینی آماده است و هر بخش را می‌توانی اصلاح کنی.`
         : "پیشنهاد بر پایهٔ پاسخ‌هایت آمادهٔ بازبینی است؛ می‌توانی متن را اصلاح کنی.",
+      answerSufficient,
       stageComplete: true,
       coveredSections: [],
       nextSection: null,
@@ -322,7 +328,7 @@ export function createDemoDecision(
     isUnsure ? "لازم نیست از همین حالا پاسخ قطعی داشته باشی." : "",
     safeSeed ? `در ارتباط با «${safeSeed}»،` : "",
     questionContextForAxis(nextSection),
-    "برای نمونه، می‌توانی از یک موقعیت کوچک یا چیزی که خودت دیده‌ای شروع کنی.",
+    "به جزئیات مشخصی که خودت می‌دانی تکیه کن؛ اگر هنوز روشن نیست، همان را بگو.",
   ]
     .filter(Boolean)
     .join("؛ ");
@@ -330,6 +336,7 @@ export function createDemoDecision(
     mentorMessage: canQuoteAnswer
       ? `نوشتی «${answerQuote}». اگر برداشتم دقیق نیست، می‌توانی اصلاحم کنی.`
       : "اگر درست فهمیدم، این نکته برایت مهم است؛ اگر برداشتم دقیق نیست، می‌توانی اصلاحم کنی.",
+    answerSufficient,
     stageComplete: false,
     coveredSections: [],
     nextSection,
@@ -345,7 +352,7 @@ export function questionContextForAxis(section: string): string {
     "What is known": "جداکردن دانسته‌ها از پرسش‌های بی‌پاسخ کمک می‌کند از تکرار راه‌های آزموده‌شده دور بمانیم",
     "Your idea": "روشن‌شدن سازوکار راهکار کمک می‌کند ببینیم ایده قرار است چگونه به مسئله پاسخ دهد",
     "Your connection": "شناخت انگیزه و ارتباط تو با موضوع کمک می‌کند نقطهٔ شروع و توانایی‌های خودت را در نظر بگیریم",
-    Evidence: "نمونه‌های واقعی کمک می‌کنند مسئله را با شواهد قابل بررسی بسنجیم",
+    Evidence: "شواهد قابل بررسی کمک می‌کنند مسئله را از برداشت‌های اولیه جدا کنیم",
     Stakeholders: "شناخت افراد مرتبط کمک می‌کند دیدگاه‌های لازم و کسانی را که ممکن است نادیده بمانند پیدا کنیم",
     "Root causes": "بررسی علت‌های احتمالی کمک می‌کند میان نشانهٔ مسئله و ریشه‌های آن تفاوت بگذاریم",
     Solution: "روشن‌شدن تجربهٔ افراد از راهکار کمک می‌کند بفهمیم تغییر موردنظر در عمل چگونه رخ می‌دهد",

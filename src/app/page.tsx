@@ -1,12 +1,11 @@
 "use client";
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import StructuredRegistrationForm from "./structured-registration-form";
 import SpeechInputControl from "./speech-input-control";
 import {
   ArrowLeft,
   ArrowRight,
-  BadgeCheck,
   BookOpenText,
   Check,
   ChevronDown,
@@ -20,7 +19,6 @@ import {
   Lightbulb,
   LockKeyhole,
   MessageCircle,
-  Pencil,
   Plus,
   BarChart3,
   Database,
@@ -41,47 +39,31 @@ import {
   formatNumber,
   isPersianText,
   normalizeDigits,
+  toPersianDigits,
 } from "@/lib/locale";
 import {
   applyDeadlineTransitions,
-  awardToken,
   canCreateIdea,
-  developmentProgressIndex,
-  deferSubmission,
   emptyState,
   hasCompletedDevelopment,
   normalizeState,
   removeIdea,
   SCHEMA_VERSION,
   STORAGE_KEY,
-  submitNow,
   type AppState,
-  type Answer,
   type Idea,
-  type Stage,
 } from "@/lib/domain";
 import {
   STRUCTURED_STORAGE_KEY,
+  structuredScore,
   createStructuredDraft,
   normalizeRegistrationStore,
   type StructuredRegistration,
 } from "@/lib/structured-registration";
 import {
-  axesForStage,
-  developmentOpeningQuestion,
-  findAxis,
-  questionContextForAxis,
-  validateInterviewDecision,
   INTAKE_AXES as intakeQuestions,
   DEVELOPMENT_AXES as developmentQuestions,
-  type InterviewRequest,
 } from "@/lib/interviewer";
-import { isValidOpeningQuestion } from "@/lib/opening-question";
-import {
-  moderationMessage,
-  type ModerationCategory,
-  type ModerationInput,
-} from "@/lib/moderation";
 
 type Screen =
   | "home"
@@ -89,16 +71,17 @@ type Screen =
   | "structured"
   | "details"
   | "verify"
-  | "intake"
-  | "initial-confirmed"
-  | "dashboard"
-  | "develop"
-  | "review"
-  | "submitted";
+  | "dashboard";
 type MentorChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
+type MentorChatReveal = { messageIndex: number; visibleWords: number };
+
+function mentorWords(message: string): string[] {
+  return message.match(/\S+\s*/gu) ?? [];
+}
+
 type IdeaMentorStage =
   | "conversation"
   | "write-idea"
@@ -127,100 +110,9 @@ const labels = {
     "awaiting-confirmation": "در انتظار تأیید",
     submitted: "ارسال‌شده",
   },
-  localNotice:
-    "ایده‌ها، پاسخ‌ها و ثبت‌های ساختاریافته فقط در فضای ذخیره‌سازی همین مرورگر نگهداری می‌شوند و بین دستگاه‌ها همگام‌سازی نمی‌شوند. پاک‌کردن داده‌های مرورگر ممکن است آن‌ها را برای همیشه حذف کند.",
+  privacyNotice:
+    "برای حفظ حریم خصوصی، اطلاعات هویتی و شمارهٔ همراه پیش از پردازش پاسخ‌ها حذف می‌شوند.",
 };
-
-function mentorFailureMessage(payload: unknown): string {
-  if (payload && typeof payload === "object" && "code" in payload) {
-    switch (payload.code) {
-      case "provider_rate_limited":
-        return "راهنمای هوشمند موقتاً مشغول است. پاسخ شما ذخیره شده؛ کمی صبر کنید و دوباره تلاش کنید.";
-      case "provider_timeout":
-        return "آماده‌کردن پرسش بعدی بیش از حد طول کشید. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.";
-      case "provider_unavailable":
-        return "راهنمای هوشمند موقتاً در دسترس نیست. پاسخ شما ذخیره شده؛ کمی بعد دوباره تلاش کنید.";
-      case "provider_authentication":
-      case "provider_configuration":
-        return "تنظیمات راهنمای هوشمند نیاز به بررسی دارد. پاسخ شما ذخیره شده است.";
-      case "provider_request_rejected":
-        return "راهنمای هوشمند نتوانست درخواست را بپذیرد. پاسخ شما ذخیره شده و تنظیمات سرویس باید بررسی شود.";
-      case "provider_invalid_response":
-        return "پرسش بعدی آماده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.";
-    }
-  }
-  if (payload && typeof payload === "object" && "error" in payload) {
-    if (typeof payload.error === "string" && isPersianText(payload.error))
-      return payload.error;
-  }
-  return "پرسش بعدی آماده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.";
-}
-
-async function moderateContent(input: ModerationInput): Promise<ModerationCategory> {
-  const response = await fetch("/api/mentor/moderate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error("moderation_response_unreadable");
-  }
-  if (
-    !response.ok ||
-    !payload ||
-    typeof payload !== "object" ||
-    !("category" in payload) ||
-    !["relevant", "off_topic", "restricted"].includes(payload.category as string)
-  )
-    throw new Error("moderation_unavailable");
-  return payload.category as ModerationCategory;
-}
-
-const sectionLabels: Record<string, string> = {
-  "The problem": "مسئله",
-  "People affected": "افراد درگیر",
-  "What is known": "دانسته‌ها",
-  "Your idea": "ایدهٔ تو",
-  "Your connection": "ارتباط تو با مسئله",
-  Evidence: "شواهد",
-  Stakeholders: "افراد و گروه‌های مرتبط",
-  "Root causes": "ریشه‌های مسئله",
-  Solution: "راهکار",
-  Feasibility: "امکان‌پذیری",
-  Pilot: "اجرای آزمایشی",
-  Outcomes: "نتایج",
-  "Inclusion and risk": "مشارکت و خطرها",
-  Delivery: "اجرا",
-  "Next actions": "گام‌های بعدی",
-};
-
-const proposalLabels: Record<string, string> = {
-  summary: "خلاصهٔ کوتاه",
-  problem: "مسئله و شواهد",
-  beneficiaries: "افراد بهره‌مند",
-  solution: "راهکار پیشنهادی",
-  impact: "تأثیر اجتماعی مورد انتظار",
-  evidence: "شواهد و فرض‌ها",
-  feasibility: "امکان‌پذیری و منابع",
-  pilot: "اجرای آزمایشی و گام‌های بعدی",
-  measurement: "سنجش نتایج",
-  risks: "خطرها و راه‌های کاهش آن‌ها",
-  openQuestions: "پرسش‌های بی‌پاسخ",
-};
-
-function displaySection(section: string) {
-  const knownSection = Object.keys(sectionLabels).find(
-    (label) => label.toLowerCase() === section.toLowerCase(),
-  );
-  return knownSection
-    ? sectionLabels[knownSection]
-    : isPersianText(section)
-      ? section
-      : "بخش دیگر";
-}
 
 function displayTokenReason(reason: string) {
   const knownReasons: Record<string, string> = {
@@ -237,147 +129,10 @@ function displayTokenReason(reason: string) {
       : "پیشرفت در مسیر پرورش ایده";
 }
 
-function displayProposalText(value: string) {
-  return value === "Not yet explored with the participant." ||
-    value ===
-      "\u0627\u06cc\u0646\u0020\u0645\u0648\u0631\u062f\u0020\u0647\u0646\u0648\u0632\u0020\u0628\u0631\u0631\u0633\u06cc\u0020\u0646\u0634\u062f\u0647\u0020\u0627\u0633\u062a\u002e"
-    ? "هنوز بررسی نشده است."
-    : value;
-}
-
-function displayIntakeSummary(idea: Idea) {
-  const formattedAnswers = idea.answers
-    .map((answer) => `${answer.question}\n${answer.answer}`)
-    .join("\n\n");
-  const generatedSummaries = new Set([
-    `${idea.seed}\n\n${idea.answers.map((answer) => `${answer.section}: ${answer.answer}`).join("\n\n")}`,
-    `${idea.seed}\n\n${idea.answers.map((answer) => `${displaySection(answer.section)}: ${answer.answer}`).join("\n\n")}`,
-    `${idea.seed}\n\n${formattedAnswers}`,
-  ]);
-  let matchesLegacyGeneratedSummary =
-    idea.intakeSummary?.startsWith(`${idea.seed}\n\n`) ?? false;
-  if (matchesLegacyGeneratedSummary && idea.intakeSummary) {
-    let remaining = idea.intakeSummary.slice(idea.seed.length + 2);
-    for (const [index, answer] of idea.answers.entries()) {
-      const answerMarker = `: ${answer.answer}`;
-      const markerIndex = remaining.indexOf(answerMarker);
-      if (markerIndex <= 0 || remaining.slice(0, markerIndex).includes("\n")) {
-        matchesLegacyGeneratedSummary = false;
-        break;
-      }
-      remaining = remaining.slice(markerIndex + answerMarker.length);
-      if (index < idea.answers.length - 1) {
-        if (!remaining.startsWith("\n\n")) {
-          matchesLegacyGeneratedSummary = false;
-          break;
-        }
-        remaining = remaining.slice(2);
-      }
-    }
-    matchesLegacyGeneratedSummary &&= remaining.length === 0;
-  }
-  if (
-    idea.intakeSummary &&
-    !generatedSummaries.has(idea.intakeSummary) &&
-    !matchesLegacyGeneratedSummary
-  )
-    return idea.intakeSummary;
-  return `${idea.seed}\n\n${formattedAnswers}`;
-}
-
 function hasUnfinishedStructuredRegistration(registration: StructuredRegistration) {
   return registration.status === "draft" ||
     registration.activeFlow === "F" ||
     Object.values(registration.workbooks).some((workbook) => workbook.status !== "submitted");
-}
-
-function makeId() {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function newIdea(seed: string): Idea {
-  const now = new Date().toISOString();
-  const title =
-    seed
-      .trim()
-      .replace(/\s+/g, " ")
-      .slice(0, 48)
-      .replace(/[.!?؟]$/, "") || "ایدهٔ بدون عنوان";
-  return {
-    id: makeId(),
-    title,
-    seed: seed.trim(),
-    status: "initial",
-    stage: "initial",
-    answers: [],
-    proposal: {},
-    tokens: [],
-    intakeIndex: 0,
-    developmentIndex: 0,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function getQuestion(idea: Idea, stage: "initial" | "development") {
-  const index =
-    stage === "initial"
-      ? (idea.intakeIndex ?? 0)
-      : getDevelopmentIndex(idea);
-  const list = stage === "initial" ? intakeQuestions : developmentQuestions;
-  const axis = list[Math.min(index, list.length - 1)];
-  const defaultQuestionContext = questionContextForAxis(axis.section);
-  const base = { ...axis, questionContext: defaultQuestionContext };
-  const existing = idea.answers.find((item) => item.section === base.section);
-  if (
-    idea.pendingTurn?.stage === stage &&
-    idea.pendingTurn.index === index &&
-    idea.pendingTurn.section === base.section &&
-    isPersianText(idea.pendingTurn.question)
-  )
-    return {
-      ...base,
-      question: idea.pendingTurn.question,
-      questionContext:
-        idea.pendingTurn.questionContext || defaultQuestionContext,
-    };
-  if (
-    idea.mentorNextQuestion?.stage === stage &&
-    idea.mentorNextQuestion.index === index &&
-    (!idea.mentorNextQuestion.section ||
-      idea.mentorNextQuestion.section === base.section) &&
-    isPersianText(idea.mentorNextQuestion.text)
-  ) {
-    return {
-      ...base,
-      question: idea.mentorNextQuestion.text,
-      questionContext:
-        idea.mentorNextQuestion.questionContext || defaultQuestionContext,
-    };
-  }
-  if (
-    idea.editingProgress?.stage === stage &&
-    idea.editingProgress.index === index &&
-    existing &&
-    isPersianText(existing.question)
-  )
-    return {
-      ...base,
-      question: existing.question,
-      questionContext: defaultQuestionContext,
-    };
-  if (idea.draftAnswer) return base;
-  return base;
-}
-
-function getDevelopmentIndex(idea: Idea) {
-  if (idea.pendingTurn?.stage === "development")
-    return idea.pendingTurn.index;
-  if (idea.editingProgress?.stage === "development")
-    return idea.developmentIndex ?? 0;
-  return developmentProgressIndex(idea);
 }
 
 function getProgress(idea: Idea) {
@@ -438,7 +193,7 @@ export default function Home() {
       setStorageError("");
     } catch {
       setStorageError(
-        "این پیش‌نویس در حافظهٔ فعلی صفحه نگه داشته شد، اما در مرورگر ذخیره نشد و ممکن است با بستن صفحه از دست برود.",
+        "پیش‌نویس ثبت نشد؛ دوباره تلاش کنید.",
       );
     }
   }
@@ -460,7 +215,7 @@ export default function Home() {
       localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
     } catch {
       setStorageError(
-        "ثبت نهایی ذخیره نشد. پاسخ‌ها به‌صورت پیش‌نویس در همین صفحه باقی‌اند؛ فضای ذخیره‌سازی مرورگر را بررسی کنید.",
+        "ثبت نهایی انجام نشد؛ دوباره تلاش کنید.",
       );
       return false;
     }
@@ -470,23 +225,10 @@ export default function Home() {
     return true;
   }
 
-  function startStructuredRegistration(initialIdea = "") {
+  function startStructuredRegistration(initialIdea: string) {
     structuredReturnScreenRef.current = "home";
-    const existing = initialIdea
-      ? undefined
-      : registrationsRef.current.find(hasUnfinishedStructuredRegistration);
-    if (existing) {
-      setActiveRegistration(
-        existing.status === "submitted" && existing.activeFlow !== "F"
-          ? { ...existing, activeFlow: "dashboard" }
-          : existing,
-      );
-      setFormError("");
-      setScreen("structured");
-      return;
-    }
     if (!canCreateIdea(stateRef.current, registrationsRef.current.length)) {
-      setFormError("به سقف سه ثبت در این مرورگر رسیده‌اید. ثبت‌های ذخیره‌شده همچنان در دسترس‌اند.");
+      setFormError("به سقف سه ثبت رسیده‌اید. ثبت‌های قبلی همچنان در دسترس‌اند.");
       return;
     }
     const created = createStructuredDraft();
@@ -505,7 +247,7 @@ export default function Home() {
       setStorageError("");
     } catch {
       setStorageError(
-        "پیش‌نویس فقط تا وقتی این صفحه باز است نگه داشته می‌شود؛ ذخیره‌سازی مرورگر در دسترس نیست.",
+        "پیش‌نویس ثبت نشد؛ دوباره تلاش کنید.",
       );
     }
     setScreen("structured");
@@ -518,7 +260,7 @@ export default function Home() {
   }
   const [ready, setReady] = useState(false);
   const [screen, setScreen] = useState<Screen>("home");
-  const signupDestinationRef = useRef<"intake" | "idea-mentor" | null>(null);
+  const signupDestinationRef = useRef<"idea-mentor" | null>(null);
   const [infoDialog, setInfoDialog] = useState<"mentor" | "about" | null>(null);
   const infoDialogTriggerRef = useRef<HTMLButtonElement>(null);
   const infoDialogRef = useRef<HTMLElement>(null);
@@ -564,22 +306,12 @@ export default function Home() {
   const [seedSpeechBusy, setSeedSpeechBusy] = useState(false);
   const seedInputRef = useRef<HTMLTextAreaElement>(null);
   const [formError, setFormError] = useState("");
-  const [seedEditOpen, setSeedEditOpen] = useState(false);
-  const [seedEditDraft, setSeedEditDraft] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [nationalId, setNationalId] = useState("");
   const [mobile, setMobile] = useState("");
   const [maskedMobile, setMaskedMobile] = useState("");
   const [code, setCode] = useState("");
-  const [activeId, setActiveId] = useState("");
-  const [draftAnswer, setDraftAnswer] = useState("");
-  const [mentorMessage, setMentorMessage] = useState(
-    "قدم‌به‌قدم همراهت هستم. لازم نیست از همین حالا پاسخ همهٔ پرسش‌ها را بدانی.",
-  );
-  const [mentorMode, setMentorMode] = useState<"demo" | "provider" | null>(
-    null,
-  );
   const [mentorChatMessages, setMentorChatMessages] = useState<
     MentorChatMessage[]
   >([
@@ -593,6 +325,7 @@ export default function Home() {
   const [mentorChatBusy, setMentorChatBusy] = useState(false);
   const [mentorChatError, setMentorChatError] = useState("");
   const [mentorChatOpen, setMentorChatOpen] = useState(false);
+  const [mentorChatReveal, setMentorChatReveal] = useState<MentorChatReveal | null>(null);
   const mentorChatBusyRef = useRef(false);
   const mentorChatEndRef = useRef<HTMLDivElement>(null);
   const mentorChatInputRef = useRef<HTMLTextAreaElement>(null);
@@ -606,15 +339,6 @@ export default function Home() {
   const ideaMentorBusyRef = useRef(false);
   const ideaMentorEndRef = useRef<HTMLDivElement>(null);
   const ideaMentorInputRef = useRef<HTMLTextAreaElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [moderationBusy, setModerationBusy] = useState(false);
-  const [openingBusy, setOpeningBusy] = useState(false);
-  const [openingAttempt, setOpeningAttempt] = useState(0);
-  const openingRequestRef = useRef("");
-  const busyRef = useRef(false);
-  const [reviewDraft, setReviewDraft] = useState<Record<string, string>>({});
-  const [now, setNow] = useState(Date.now());
-  const [tokenNotice, setTokenNotice] = useState("");
   const [storageError, setStorageError] = useState("");
 
   useEffect(() => {
@@ -628,7 +352,7 @@ export default function Home() {
     } catch {
       commitState(emptyState());
       setStorageError(
-        "فضای ذخیره‌سازی مرورگر در دسترس نیست یا داده‌های ذخیره‌شده خوانده نشدند. ممکن است تغییرات این نشست پس از بارگذاری دوباره از دست بروند.",
+        "بارگذاری اطلاعات با مشکل روبه‌رو شد. صفحه را دوباره بارگذاری کنید.",
       );
     }
     try {
@@ -639,7 +363,7 @@ export default function Home() {
       commitRegistrations(parsedRegistrations);
     } catch {
       setStorageError(
-        "پیش‌نویس‌های ثبت ایده خوانده نشدند. ممکن است ذخیره‌سازی مرورگر در دسترس نباشد.",
+        "پیش‌نویس‌های ثبت ایده بارگذاری نشدند. دوباره تلاش کنید.",
       );
     }
     setReady(true);
@@ -651,46 +375,34 @@ export default function Home() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {
       setStorageError(
-        "تغییرات در این مرورگر ذخیره نشدند و ممکن است پس از بارگذاری دوباره از دست بروند. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
+        "تغییرات ثبت نشدند؛ دوباره تلاش کنید.",
       );
     }
   }, [state, ready]);
 
   useEffect(() => {
-    if (!ready || (screen !== "intake" && screen !== "develop")) return;
-    let active = true;
-    fetch("/api/mentor", { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Mentor mode could not be checked");
-        const payload: unknown = await response.json();
-        if (
-          payload &&
-          typeof payload === "object" &&
-          "mode" in payload &&
-          (payload.mode === "demo" || payload.mode === "provider") &&
-          active
-        )
-          setMentorMode(payload.mode);
-      })
-      .catch(() => {
-        if (active)
-          setFormError(
-            "وضعیت گفت‌وگو مشخص نشد. پاسخ شما پیش از تلاش برای ادامه ذخیره خواهد شد.",
-          );
-      });
-    return () => {
-      active = false;
-    };
-  }, [screen, ready]);
+    mentorChatEndRef.current?.scrollIntoView({
+      behavior: mentorChatReveal ? "auto" : "smooth",
+      block: "end",
+    });
+  }, [mentorChatMessages, mentorChatBusy, mentorChatReveal]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
+    if (!mentorChatOpen || !mentorChatReveal) return;
+    const message = mentorChatMessages[mentorChatReveal.messageIndex];
+    if (!message || message.role !== "assistant") return;
+    const wordCount = mentorWords(toPersianDigits(message.content)).length;
+    if (mentorChatReveal.visibleWords >= wordCount) return;
 
-  useEffect(() => {
-    mentorChatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [mentorChatMessages, mentorChatBusy]);
+    const timer = window.setTimeout(() => {
+      setMentorChatReveal((current) =>
+        current?.messageIndex === mentorChatReveal.messageIndex
+          ? { ...current, visibleWords: current.visibleWords + 1 }
+          : current,
+      );
+    }, 55);
+    return () => window.clearTimeout(timer);
+  }, [mentorChatMessages, mentorChatOpen, mentorChatReveal]);
 
   useEffect(() => {
     ideaMentorEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -711,93 +423,16 @@ export default function Home() {
     };
   }, [mentorChatOpen]);
 
-  useEffect(() => {
-    const deadline = state.ideas
-      .filter((idea) => idea.status === "awaiting-confirmation")
-      .map((idea) => new Date(idea.confirmationDeadlineAt ?? "").getTime())
-      .filter(Number.isFinite)
-      .sort((left, right) => left - right)[0];
-    if (deadline === undefined) return;
-    const timer = window.setTimeout(
-      () => setNow(Date.now()),
-      Math.max(0, deadline - Date.now()),
-    );
-    return () => window.clearTimeout(timer);
-  }, [state.ideas]);
-
-  useEffect(() => {
-    commitState((current) => applyDeadlineTransitions(current, new Date(now)));
-  }, [now]);
-
-  const activeIdea = useMemo(
-    () => state.ideas.find((idea) => idea.id === activeId),
-    [state.ideas, activeId],
-  );
   const tokenTotal = state.ideas.reduce(
     (sum, idea) =>
       sum + idea.tokens.reduce((total, entry) => total + entry.amount, 0),
     0,
   );
 
-  function announceNewToken(previous: Idea, next: Idea) {
-    const newEntries = next.tokens.filter(
-      (entry) => !previous.tokens.some((token) => token.id === entry.id),
-    );
-    if (newEntries.length)
-      setTokenNotice(
-        newEntries
-          .map(
-            (entry) =>
-              `\u2068+${formatNumber(entry.amount)}\u2069 توکن · ${displayTokenReason(entry.reason)}`,
-          )
-          .join("؛ "),
-      );
-  }
-
-  useEffect(() => {
-    if (!tokenNotice) return;
-    const timer = window.setTimeout(() => setTokenNotice(""), 5000);
-    return () => window.clearTimeout(timer);
-  }, [tokenNotice]);
-
-  function updateIdea(updated: Idea) {
-    commitState((current) => ({
-      ...current,
-      ideas: current.ideas.map((idea) =>
-        idea.id === updated.id
-          ? { ...updated, updatedAt: new Date().toISOString() }
-          : idea,
-      ),
-    }));
-  }
-
-  const saveIdeaImmediately = useCallback((updated: Idea): Idea | null => {
-    const savedIdea = { ...updated, updatedAt: new Date().toISOString() };
-    const currentState = stateRef.current;
-    const nextState: AppState = {
-      ...currentState,
-      ideas: currentState.ideas.map((idea) =>
-        idea.id === savedIdea.id ? savedIdea : idea,
-      ),
-    };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-    } catch {
-      setFormError("پاسخ شما ذخیره نشد. فضای ذخیره‌سازی مرورگر را بررسی و دوباره تلاش کنید.");
-      setStorageError(
-        "ذخیره‌سازی مرورگر با خطا روبه‌رو شد. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
-      );
-      return null;
-    }
-    stateRef.current = nextState;
-    setState(nextState);
-    return savedIdea;
-  }, []);
-
   function deleteIdea(idea: Idea) {
     if (
       !window.confirm(
-        `از حذف «${idea.title}» و همهٔ پاسخ‌های ذخیره‌شدهٔ آن مطمئن هستید؟`,
+        `از حذف «${idea.title}» و همهٔ پاسخ‌های آن مطمئن هستید؟`,
       )
     )
       return;
@@ -806,20 +441,14 @@ export default function Home() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
     } catch {
-      setFormError("ایده از مرورگر حذف نشد. فضای ذخیره‌سازی را بررسی و دوباره تلاش کنید.");
+      setFormError("ایده حذف نشد؛ دوباره تلاش کنید.");
       setStorageError(
-        "ذخیره‌سازی مرورگر با خطا روبه‌رو شد. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
+        "حذف ایده با مشکل روبه‌رو شد؛ دوباره تلاش کنید.",
       );
       return;
     }
 
     commitState(nextState);
-    if (activeId === idea.id) {
-      setActiveId("");
-      setDraftAnswer("");
-      setReviewDraft({});
-      setScreen("dashboard");
-    }
     setFormError("");
   }
 
@@ -829,7 +458,7 @@ export default function Home() {
   ) {
     if (
       !window.confirm(
-        `از حذف «${title}» و همهٔ پاسخ‌های ذخیره‌شدهٔ آن مطمئن هستید؟`,
+        `از حذف «${title}» و همهٔ پاسخ‌های آن مطمئن هستید؟`,
       )
     )
       return;
@@ -840,9 +469,9 @@ export default function Home() {
     try {
       localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
     } catch {
-      setFormError("ثبت از مرورگر حذف نشد. فضای ذخیره‌سازی را بررسی و دوباره تلاش کنید.");
+      setFormError("ثبت حذف نشد؛ دوباره تلاش کنید.");
       setStorageError(
-        "ذخیره‌سازی مرورگر با خطا روبه‌رو شد. دسترسی و فضای ذخیره‌سازی مرورگر را بررسی کنید.",
+        "حذف ثبت با مشکل روبه‌رو شد؛ دوباره تلاش کنید.",
       );
       return;
     }
@@ -853,52 +482,6 @@ export default function Home() {
       setScreen("dashboard");
     }
     setFormError("");
-  }
-
-  async function startIdea() {
-    if (!seed.trim()) {
-      setFormError("برای ادامه، چند کلمه دربارهٔ مسئله یا ایده‌تان بنویسید.");
-      return;
-    }
-    if (!canCreateIdea(state, registrationsRef.current.length)) {
-      setFormError(
-        "به سقف سه ایده رسیده‌اید. ایده‌های ذخیره‌شدهٔ شما همچنان در دسترس‌اند.",
-      );
-      return;
-    }
-    setFormError("");
-    setModerationBusy(true);
-    try {
-      const category = await moderateContent({
-        kind: "seed",
-        seed: seed.trim(),
-        text: seed.trim(),
-      });
-      if (category !== "relevant") {
-        setFormError(moderationMessage(category));
-        return;
-      }
-      if (state.profile?.verified) {
-        signupDestinationRef.current = null;
-        const idea = newIdea(seed.trim());
-        commitState((current) => ({ ...current, ideas: [...current.ideas, idea] }));
-        setActiveId(idea.id);
-        setDraftAnswer("");
-        setReviewDraft({});
-        setMentorMode(null);
-        setMentorMessage(
-          "ایده‌تان را با همان واژه‌های خودتان و با پرسش‌هایی کاربردی، قدم‌به‌قدم پرورش می‌دهیم.",
-        );
-        setScreen("intake");
-      } else {
-        signupDestinationRef.current = "intake";
-        setScreen("details");
-      }
-    } catch {
-      setFormError("بررسی ایده موقتاً در دسترس نیست؛ متن شما ذخیره نشده است. دوباره تلاش کنید.");
-    } finally {
-      setModerationBusy(false);
-    }
   }
 
   function appendSeedTranscript(transcript: string) {
@@ -949,26 +532,11 @@ export default function Home() {
       setFormError("برای ادامه، عددی ۴ تا ۸ رقمی وارد کنید.");
       return;
     }
-    if (signupDestinationRef.current === "idea-mentor") {
-      signupDestinationRef.current = null;
-      commitState((current) => ({
-        ...current,
-        schemaVersion: SCHEMA_VERSION,
-        profile: {
-          name: `${firstName.trim()} ${lastName.trim()}`,
-          verified: true,
-        },
-      }));
-      setNationalId("");
-      setMobile("");
-      setMaskedMobile("");
-      setCode("");
-      setFormError("");
-      startIdeaMentor();
+    if (signupDestinationRef.current !== "idea-mentor") {
+      setScreen("home");
       return;
     }
     signupDestinationRef.current = null;
-    const idea = newIdea(seed);
     commitState((current) => ({
       ...current,
       schemaVersion: SCHEMA_VERSION,
@@ -976,520 +544,13 @@ export default function Home() {
         name: `${firstName.trim()} ${lastName.trim()}`,
         verified: true,
       },
-      ideas: [...current.ideas, idea],
     }));
-    setActiveId(idea.id);
-    setMentorMessage(
-      "ممنون که از چیزی که دیده‌اید شروع کردید. نوشتهٔ شما را همان‌طور حفظ می‌کنیم و هر بار یک پرسش کاربردی می‌پرسیم.",
-    );
     setNationalId("");
     setMobile("");
     setMaskedMobile("");
     setCode("");
-    setDraftAnswer("");
-    setReviewDraft({});
-    setMentorMode(null);
     setFormError("");
-    setScreen("intake");
-  }
-
-  async function answerCurrent(
-    stage: "initial" | "development",
-    override?: string,
-  ) {
-    if (!activeIdea || busyRef.current) return;
-    const storedPending = activeIdea.pendingTurn?.stage === stage
-      ? activeIdea.pendingTurn
-      : undefined;
-    const pending = storedPending
-      ? {
-          ...storedPending,
-          question: isPersianText(storedPending.question)
-            ? storedPending.question
-            : getQuestion(activeIdea, stage).question,
-        }
-      : undefined;
-    const answerText = (override ?? draftAnswer).trim();
-    if (!pending && !answerText) {
-      setFormError(
-        "پاسخی کوتاه بنویسید یا برای ادامه گزینهٔ «هنوز مطمئن نیستم» را انتخاب کنید.",
-      );
-      return;
-    }
-    busyRef.current = true;
-    setBusy(true);
-    setFormError("");
-    try {
-      let updated = activeIdea;
-      let turn = pending;
-      if (!turn) {
-        const questionData = getQuestion(activeIdea, stage);
-        const index =
-          stage === "initial"
-            ? (activeIdea.intakeIndex ?? 0)
-            : getDevelopmentIndex(activeIdea);
-        const axes = axesForStage(stage);
-        const currentAxis = axes[index];
-        if (!currentAxis) {
-          setFormError("این مرحله کامل شده است.");
-          return;
-        }
-        let moderationCategory: ModerationCategory;
-        try {
-          moderationCategory = await moderateContent({
-            kind: "answer",
-            seed: activeIdea.seed,
-            question: questionData.question,
-            text: answerText,
-          });
-        } catch {
-          setFormError("بررسی پاسخ موقتاً در دسترس نیست؛ پاسخ شما ثبت نشد. دوباره تلاش کنید.");
-          return;
-        }
-        if (moderationCategory !== "relevant") {
-          const invalidResponseCount =
-            (activeIdea.invalidResponseCount ?? 0) + 1;
-          if (invalidResponseCount >= 3) {
-            const nextState = removeIdea(stateRef.current, activeIdea.id);
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-            } catch {
-              setStorageError(
-                "ذخیره‌سازی مرورگر در دسترس نیست؛ ایده حذف نشد. پس از برقراری ذخیره‌سازی دوباره تلاش کنید.",
-              );
-              setFormError("سه پاسخ نامرتبط ثبت شد، اما حذف ایده در مرورگر ذخیره نشد.");
-              return;
-            }
-            commitState(nextState);
-            setActiveId("");
-            setDraftAnswer("");
-            setReviewDraft({});
-            setScreen("dashboard");
-            setFormError("");
-            setTokenNotice("پس از سه پاسخ نامرتبط یا خارج از محدودیت‌ها، ایده از این مرورگر حذف شد.");
-            return;
-          }
-          const savedIdea = saveIdeaImmediately({
-            ...activeIdea,
-            invalidResponseCount,
-          });
-          if (!savedIdea) return;
-          setFormError(
-            `${moderationMessage(moderationCategory)} فرصت اصلاح: ${3 - invalidResponseCount} بار از ۳ بار باقی مانده است. پس از سه پاسخ نامرتبط، ایده حذف می‌شود.`,
-          );
-          return;
-        }
-        const previous = activeIdea.answers.find(
-          (item) => item.section === currentAxis.section,
-        );
-        const answer: Answer = {
-          section: currentAxis.section,
-          question: questionData.question,
-          answer: answerText,
-          createdAt: new Date().toISOString(),
-        };
-        updated = {
-          ...activeIdea,
-          answers: previous
-            ? activeIdea.answers.map((item) =>
-                item.section === answer.section ? answer : item,
-              )
-            : [...activeIdea.answers, answer],
-          draftAnswer: "",
-        };
-        updated = awardToken(
-          updated,
-          `Thoughtful progress: ${currentAxis.section.toLowerCase()}`,
-          `${stage}-${index}`,
-          2,
-        );
-
-        const editing = activeIdea.editingProgress;
-        if (editing?.stage === stage && editing.index > index) {
-          if (stage === "initial") updated.intakeIndex = editing.index;
-          else updated.developmentIndex = editing.index;
-          updated.editingProgress = undefined;
-          setDraftAnswer("");
-          const savedIdea = saveIdeaImmediately(updated);
-          if (savedIdea) announceNewToken(activeIdea, savedIdea);
-          return;
-        }
-
-        turn = {
-          stage,
-          index,
-          section: currentAxis.section,
-          question: questionData.question,
-          answer: answerText,
-          questionContext: questionData.questionContext,
-        };
-        updated.pendingTurn = turn;
-        updated.editingProgress = undefined;
-        const savedAnswer = saveIdeaImmediately(updated);
-        if (!savedAnswer) return;
-        announceNewToken(activeIdea, savedAnswer);
-        updated = savedAnswer;
-        setDraftAnswer("");
-      }
-
-      if (!turn) return;
-      const axes = axesForStage(stage);
-      const answeredSections = updated.answers
-        .filter((answer) => findAxis(answer.section, stage))
-        .map((answer) => answer.section);
-      const skippedSections =
-        stage === "development"
-          ? []
-          : (updated.skippedSections?.[stage] ?? []);
-      const remainingSections = axes
-        .slice(turn.index + 1)
-        .filter(
-          (axis) =>
-            !answeredSections.includes(axis.section) &&
-            !skippedSections.includes(axis.section),
-        )
-        .map((axis) => axis.section);
-      const history = updated.answers
-        .filter((answer) => answer.section !== turn.section)
-        .map((answer) => ({
-          answer,
-          axis: findAxis(answer.section),
-        }))
-        .filter(
-          (entry): entry is { answer: Answer; axis: NonNullable<typeof entry.axis> } =>
-            Boolean(entry.axis),
-        )
-        .sort(
-          (left, right) =>
-            Date.parse(left.answer.createdAt) -
-            Date.parse(right.answer.createdAt),
-        )
-        .slice(-14)
-        .map(({ answer, axis }) => ({
-          stage: intakeQuestions.some((item) => item.section === axis.section)
-            ? ("initial" as const)
-            : ("development" as const),
-          section: answer.section,
-          question: answer.question.slice(0, 200),
-          answer: answer.answer.slice(0, 200),
-          createdAt: answer.createdAt,
-        }));
-      const interviewRequest: InterviewRequest = {
-        seed: updated.seed,
-        stage,
-        section: turn.section,
-        index: turn.index,
-        question: turn.question,
-        answer: turn.answer,
-        answeredSections,
-        skippedSections,
-        remainingSections,
-        history,
-      };
-
-      let response: Response;
-      try {
-        response = await fetch("/api/mentor", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(interviewRequest),
-        });
-      } catch {
-        setMentorMessage("پاسخت ذخیره شد.");
-        setFormError(
-          "ارتباط با راهنمای هوشمند قطع شد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.",
-        );
-        return;
-      }
-      let payload: unknown;
-      try {
-        payload = await response.json();
-      } catch {
-        setMentorMessage("پاسخت ذخیره شد.");
-        setFormError(
-          "پاسخ راهنمای هوشمند خوانده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.",
-        );
-        return;
-      }
-      const responseMode: "provider" | "demo" | null =
-        payload &&
-        typeof payload === "object" &&
-        "mode" in payload &&
-        (payload.mode === "provider" || payload.mode === "demo")
-          ? payload.mode
-          : null;
-      if (
-        !response.ok ||
-        responseMode === null ||
-        !validateInterviewDecision(payload, interviewRequest)
-      ) {
-        setMentorMessage("پاسخت ذخیره شد.");
-        setFormError(mentorFailureMessage(payload));
-        return;
-      }
-
-      const decision = payload;
-      const nextIndex = decision.stageComplete
-        ? axes.length
-        : axes.findIndex((axis) => axis.section === decision.nextSection);
-      const completedIdea: Idea = {
-        ...updated,
-        ...(stage === "initial"
-          ? { intakeIndex: nextIndex }
-          : { developmentIndex: nextIndex }),
-        skippedSections: {
-          ...updated.skippedSections,
-          [stage]:
-            stage === "development"
-              ? []
-              : [...new Set([...skippedSections, ...decision.coveredSections])],
-        },
-        mentorNextQuestion: decision.stageComplete
-          ? undefined
-          : {
-              stage,
-              index: nextIndex,
-              section: decision.nextSection!,
-              text: decision.nextQuestion!,
-              questionContext: decision.questionContext!,
-            },
-        pendingTurn: undefined,
-        editingProgress: undefined,
-      };
-      const finalIdea =
-        stage === "development" && decision.stageComplete
-          ? awardToken(
-              completedIdea,
-              "Mentor development completed",
-              "development-complete",
-              5,
-            )
-          : completedIdea;
-      const savedFinalIdea = saveIdeaImmediately(finalIdea);
-      if (!savedFinalIdea) {
-        setFormError("پاسخ شما ذخیره شده، اما گام بعدی ذخیره نشد. دوباره تلاش کنید.");
-        return;
-      }
-      announceNewToken(activeIdea, savedFinalIdea);
-      setMentorMode(responseMode);
-      setMentorMessage(decision.mentorMessage.slice(0, 240));
-      setDraftAnswer("");
-      setFormError("");
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
-  }
-
-  function confirmInitial() {
-    if (!activeIdea) return;
-    let updated: Idea = {
-      ...activeIdea,
-      stage: "initial" as Stage,
-      status: "initial",
-      intakeSummary:
-        reviewDraft.summary ||
-        activeIdea.intakeSummary ||
-      `${activeIdea.seed}\n\n${activeIdea.answers.map((answer) => `${answer.question}\n${answer.answer}`).join("\n\n")}`,
-    };
-    updated = awardToken(
-      updated,
-      "Initial registration confirmed",
-      "initial-complete",
-      5,
-    );
-    const savedIdea = saveIdeaImmediately(updated);
-    if (!savedIdea) return;
-    announceNewToken(activeIdea, savedIdea);
-    setScreen("initial-confirmed");
-  }
-
-  function beginDevelopment(idea: Idea) {
-    setActiveId(idea.id);
-    setDraftAnswer(idea.draftAnswer ?? "");
-    const developmentIndex = getDevelopmentIndex(idea);
-    const shouldCreateOpeningQuestion =
-      developmentIndex === 0 &&
-      !idea.answers.some((answer) =>
-        developmentQuestions.some((axis) => axis.section === answer.section),
-      ) &&
-      idea.mentorNextQuestion?.stage !== "development";
-    const openingQuestion = shouldCreateOpeningQuestion
-      ? developmentOpeningQuestion(idea.seed, idea.answers)
-      : null;
-    updateIdea({
-      ...idea,
-      status:
-        idea.status === "initial" ||
-        (idea.status === "awaiting-confirmation" &&
-          !hasCompletedDevelopment(idea))
-          ? "in-development"
-          : idea.status,
-      stage: "development",
-      developmentIndex,
-      ...(idea.status === "awaiting-confirmation" &&
-      !hasCompletedDevelopment(idea)
-        ? { confirmationDeadlineAt: undefined }
-        : {}),
-      ...(openingQuestion
-        ? {
-            mentorNextQuestion: {
-              stage: "development",
-              index: 0,
-              section: developmentQuestions[0].section,
-              ...openingQuestion,
-            },
-          }
-        : {}),
-    });
-    setMentorMessage(
-      "بیایید ایده‌تان را کاربردی‌تر کنیم و آنچه مشاهده کرده‌اید از مواردی که هنوز باید آزموده شوند جدا کنیم.",
-    );
-    setScreen("develop");
-  }
-  function editAnswer(idea: Idea, answer: Answer) {
-    const intakeIndex = intakeQuestions.findIndex(
-      (question) => question.section === answer.section,
-    );
-    const developmentIndex = developmentQuestions.findIndex(
-      (question) => question.section === answer.section,
-    );
-    const editingInitial = intakeIndex >= 0;
-    const stage = editingInitial ? "initial" : "development";
-    updateIdea({
-      ...idea,
-      ...(editingInitial ? { intakeIndex } : { developmentIndex }),
-      editingProgress: {
-        stage,
-        index:
-          stage === "initial"
-            ? (idea.intakeIndex ?? 0)
-            : (idea.developmentIndex ?? 0),
-      },
-      draftAnswer: answer.answer,
-      pendingTurn:
-        idea.pendingTurn?.section === answer.section
-          ? undefined
-          : idea.pendingTurn,
-    });
-    setActiveId(idea.id);
-    setDraftAnswer(answer.answer);
-    setScreen(editingInitial ? "intake" : "develop");
-  }
-
-  function beginReview(idea: Idea) {
-    if (!hasCompletedDevelopment(idea)) {
-      setActiveId(idea.id);
-      setFormError(
-        "برای بازبینی پرونده، ابتدا به هر ده پرسش مرحلهٔ توسعه پاسخ دهید.",
-      );
-      if (
-        idea.status === "initial" &&
-        (idea.intakeIndex ?? 0) < intakeQuestions.length
-      )
-        setScreen("intake");
-      else beginDevelopment(idea);
-      return;
-    }
-    const fields = createProposal(idea);
-    setReviewDraft({ ...fields, ...idea.proposal });
-    setActiveId(idea.id);
-    const savedIdea = saveIdeaImmediately({ ...idea, stage: "review" });
-    if (!savedIdea) return;
-    setScreen("review");
-  }
-
-  function saveProposal(idea: Idea) {
-    if (!hasCompletedDevelopment(idea)) return;
-    saveIdeaImmediately({
-      ...idea,
-      title: reviewDraft.title?.trim().slice(0, 80) || idea.title,
-      proposal: reviewDraft,
-      stage: "review",
-    });
-  }
-
-  function updateProposalField(idea: Idea, key: string, value: string) {
-    if (!hasCompletedDevelopment(idea)) return;
-    const nextDraft = { ...reviewDraft, [key]: value };
-    setReviewDraft(nextDraft);
-    saveIdeaImmediately({
-      ...idea,
-      title:
-        key === "title"
-          ? value.trim().slice(0, 80) || idea.title
-          : idea.title,
-      proposal: { ...idea.proposal, [key]: value },
-      stage: "review",
-    });
-  }
-
-  function submitProposal(mode: "now" | "later") {
-    if (!activeIdea) return;
-    if (!hasCompletedDevelopment(activeIdea)) {
-      beginReview(activeIdea);
-      return;
-    }
-    let saved: Idea = {
-      ...activeIdea,
-      title: reviewDraft.title?.trim().slice(0, 80) || activeIdea.title,
-      proposal: reviewDraft,
-      stage: "review",
-    };
-    saved = awardToken(saved, "Proposal reviewed", "proposal-review", 5);
-    const updated = mode === "now" ? submitNow(saved) : deferSubmission(saved);
-    const savedIdea = saveIdeaImmediately(updated);
-    if (!savedIdea) return;
-    announceNewToken(activeIdea, savedIdea);
-    setScreen(mode === "now" ? "submitted" : "dashboard");
-  }
-
-  function createProposal(idea: Idea) {
-    const answers = Object.fromEntries(
-      idea.answers.map((answer) => [answer.section, answer.answer]),
-    );
-    const get = (...sections: string[]) =>
-      sections
-        .map((section) => answers[section])
-        .filter(Boolean)
-        .join(" ") || "Not yet explored with the participant.";
-    return {
-      title: idea.title,
-      summary: idea.intakeSummary || idea.seed,
-      problem: get("The problem", "Evidence", "What is known"),
-      beneficiaries: get("People affected", "Stakeholders"),
-      solution: get("Your idea", "Solution"),
-      impact: get("Outcomes"),
-      evidence: get("Evidence", "What is known"),
-      feasibility: get("Feasibility", "Your connection"),
-      pilot: get("Pilot", "Delivery"),
-      measurement: get("Outcomes"),
-      risks: get("Inclusion and risk", "Stakeholders"),
-      openQuestions: get("Next actions", "Evidence"),
-    };
-  }
-
-  function routeToIdea(idea: Idea) {
-    setActiveId(idea.id);
-    if (
-      idea.status === "submitted" &&
-      hasCompletedDevelopment(idea)
-    )
-      setScreen("submitted");
-    else if (
-      idea.status === "awaiting-confirmation" &&
-      hasCompletedDevelopment(idea)
-    )
-      beginReview(idea);
-    else if (
-      idea.status === "initial" &&
-      (idea.intakeIndex ?? 0) < intakeQuestions.length
-    )
-      setScreen("intake");
-    else if (idea.stage === "review" && hasCompletedDevelopment(idea))
-      beginReview(idea);
-    else if (!hasCompletedDevelopment(idea)) beginDevelopment(idea);
-    else beginReview(idea);
+    startIdeaMentor();
   }
 
   async function sendMentorChatMessage(message = mentorChatDraft) {
@@ -1569,6 +630,10 @@ export default function Home() {
         { role: "user", content },
         { role: "assistant", content: reply },
       ]);
+      setMentorChatReveal({
+        messageIndex: mentorChatMessages.length + 1,
+        visibleWords: 0,
+      });
       setMentorChatDraft("");
     } catch (error) {
       setMentorChatError(
@@ -1696,7 +761,7 @@ export default function Home() {
       return;
     }
     if (!canCreateIdea(stateRef.current, registrationsRef.current.length)) {
-      setFormError("به سقف سه ثبت در این مرورگر رسیده‌اید. ثبت‌های ذخیره‌شده همچنان در دسترس‌اند.");
+      setFormError("به سقف سه ثبت رسیده‌اید. ثبت‌های قبلی همچنان در دسترس‌اند.");
       return;
     }
     setFormError("");
@@ -1732,148 +797,6 @@ export default function Home() {
       .map((part) => part[0] ?? "")
       .join("")
       .toUpperCase() || "J";
-  const currentQuestion = activeIdea
-    ? getQuestion(activeIdea, "initial")
-    : {
-        ...intakeQuestions[0],
-        questionContext: questionContextForAxis(intakeQuestions[0].section),
-      };
-  const devQuestion = activeIdea
-    ? getQuestion(activeIdea, "development")
-    : {
-        ...developmentQuestions[0],
-        questionContext: questionContextForAxis(developmentQuestions[0].section),
-      };
-  const initialIndex = activeIdea?.intakeIndex ?? 0;
-  const initialQuestionReady =
-    initialIndex > 0 ||
-    (activeIdea?.pendingTurn?.stage === "initial" &&
-      activeIdea.pendingTurn.index === initialIndex &&
-      activeIdea.pendingTurn.section === intakeQuestions[initialIndex]?.section &&
-      isPersianText(activeIdea.pendingTurn.question)) ||
-    (activeIdea?.mentorNextQuestion?.stage === "initial" &&
-      activeIdea.mentorNextQuestion.index === initialIndex &&
-      activeIdea.mentorNextQuestion.section ===
-        intakeQuestions[initialIndex]?.section &&
-      isPersianText(activeIdea.mentorNextQuestion.text)) ||
-    (activeIdea?.editingProgress?.stage === "initial" &&
-      activeIdea.editingProgress.index === initialIndex &&
-      activeIdea.answers.some(
-        (answer) => answer.section === intakeQuestions[initialIndex]?.section,
-      ));
-
-  useEffect(() => {
-    if (
-      !ready ||
-      screen !== "intake" ||
-      !activeIdea ||
-      initialIndex !== 0 ||
-      initialQuestionReady
-    )
-      return;
-
-    const requestKey = `${activeIdea.id}:${activeIdea.seed}`;
-    if (openingRequestRef.current === requestKey) return;
-    openingRequestRef.current = requestKey;
-    setOpeningBusy(true);
-    setFormError("");
-
-    void (async () => {
-      try {
-        const response = await fetch("/api/mentor/opening", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ seed: activeIdea.seed }),
-        });
-        let payload: unknown;
-        try {
-          payload = await response.json();
-        } catch {
-          throw new Error("opening_response_unreadable");
-        }
-        if (
-          !response.ok ||
-          !payload ||
-          typeof payload !== "object" ||
-          !("mode" in payload) ||
-          (payload.mode !== "demo" && payload.mode !== "provider") ||
-          !isValidOpeningQuestion(payload)
-        ) {
-          throw new Error(
-            payload && typeof payload === "object"
-              ? mentorFailureMessage(payload)
-              : "opening_response_invalid",
-          );
-        }
-
-        const currentIdea = stateRef.current.ideas.find(
-          (idea) => idea.id === activeIdea.id,
-        );
-        if (!currentIdea || currentIdea.seed !== activeIdea.seed) return;
-        const savedIdea = saveIdeaImmediately({
-          ...currentIdea,
-          mentorNextQuestion: {
-            stage: "initial",
-            index: 0,
-            section: intakeQuestions[0].section,
-            text: payload.question,
-            questionContext: payload.questionContext,
-          },
-        });
-        if (!savedIdea) return;
-        setMentorMode(payload.mode);
-        setMentorMessage(
-          "از همان ایده‌ای که نوشتی شروع می‌کنیم؛ اگر لازم باشد، پرسش را با پاسخ‌هایت دقیق‌تر می‌کنیم.",
-        );
-      } catch (error) {
-        setFormError(
-          error instanceof Error &&
-            error.message !== "opening_response_unreadable" &&
-            error.message !== "opening_response_invalid"
-            ? error.message
-            : "پرسش آغازین آماده نشد؛ دوباره تلاش کنید. ایدهٔ شما ذخیره است.",
-        );
-        openingRequestRef.current = "";
-      } finally {
-        setOpeningBusy(false);
-      }
-    })();
-  }, [
-    activeIdea,
-    initialIndex,
-    initialQuestionReady,
-    openingAttempt,
-    ready,
-    saveIdeaImmediately,
-    screen,
-  ]);
-
-  const devIndex = activeIdea ? getDevelopmentIndex(activeIdea) : 0;
-  const pendingAnswer = activeIdea?.pendingTurn
-    ? activeIdea.answers.find(
-        (answer) => answer.section === activeIdea.pendingTurn?.section,
-      )
-    : undefined;
-  const totalTokens =
-    activeIdea?.tokens.reduce((sum, token) => sum + token.amount, 0) ?? 0;
-  const remainingHours = activeIdea?.confirmationDeadlineAt
-    ? Math.max(
-        0,
-        Math.ceil(
-          (Date.parse(activeIdea.confirmationDeadlineAt) - now) / 3_600_000,
-        ),
-      )
-    : 0;
-
-  useEffect(() => {
-    if (
-      screen === "review" &&
-      activeIdea?.status === "submitted" &&
-      activeIdea.autoSubmitted
-    )
-      setScreen("submitted");
-  }, [activeIdea, screen]);
-
   if (!ready)
     return (
       <main className="loading-screen" aria-label="در حال آماده‌سازی جوانه">
@@ -1886,19 +809,19 @@ export default function Home() {
 
   return (
     <main
-      className={`app-shell${screen === "home" ? " landing-shell" : screen === "intake" ? " intake-shell" : screen === "dashboard" ? " dashboard-shell" : screen === "idea-mentor" ? " idea-mentor-shell" : ["details", "verify", "develop", "review", "submitted", "initial-confirmed", "structured"].includes(screen) ? " glass-shell" : ""}`}
+      className={`app-shell${screen === "home" ? " landing-shell" : screen === "dashboard" ? " dashboard-shell" : screen === "idea-mentor" ? " idea-mentor-shell" : ["details", "verify", "structured"].includes(screen) ? " glass-shell" : ""}`}
     >
       <header
-        className={`topbar${screen === "home" || screen === "intake" ? " landing-topbar" : ""}`}
+        className={`topbar${screen === "home" ? " landing-topbar" : ""}`}
       >
         <button
-          className={`brand${screen === "home" || screen === "intake" ? " landing-brand" : ""}`}
+          className={`brand${screen === "home" ? " landing-brand" : ""}`}
           onClick={() => setScreen("home")}
           aria-label="صفحهٔ اصلی جوانه"
         >
           <Image
             className={
-              screen === "home" || screen === "intake"
+              screen === "home"
                 ? "landing-logo"
                 : "brand-logo"
             }
@@ -1909,18 +832,18 @@ export default function Home() {
             priority={screen === "home"}
           />
         </button>
-        {screen === "home" || screen === "intake" ? (
+        {screen === "home" ? (
           <>
             <nav className="landing-nav" aria-label="پیمایش اصلی">
               <a
                 className={screen === "home" ? "is-active" : ""}
-                href={screen === "home" ? "#about" : "#intake-stage"}
+                href="#about"
               >
                 رویداد
               </a>
               <button
                 type="button"
-                className={`landing-nav-button${screen === "intake" ? " is-active" : ""}`}
+                className="landing-nav-button"
                 aria-haspopup="dialog"
                 aria-expanded={infoDialog === "mentor"}
                 onClick={(event) => {
@@ -1942,7 +865,7 @@ export default function Home() {
               >
                 درباره ما
               </button>
-              <a href={screen === "home" ? "#faq" : "#intake-faq"}>پرسش‌های متداول</a>
+              <a href="#faq">پرسش‌های متداول</a>
             </nav>
             <div className="landing-actions">
               <button
@@ -1955,14 +878,10 @@ export default function Home() {
               <button
                 className="landing-signup"
                 onClick={() => {
-                  if (screen === "home") {
-                    document.getElementById("idea-seed")?.focus();
-                  } else {
-                    document.getElementById("initial-answer")?.focus();
-                  }
+                  document.getElementById("idea-seed")?.focus();
                 }}
               >
-                {screen === "home" ? "شروع یک ایده" : "ادامه"}
+                شروع یک ایده
                 <ArrowRight size={16} aria-hidden="true" />
               </button>
             </div>
@@ -2340,22 +1259,6 @@ export default function Home() {
           <span>{storageError}</span>
         </p>
       )}
-      <div
-        className={`token-reward-slot${screen === "home" && !tokenNotice ? " landing-token-slot" : ""}`}
-      >
-        {tokenNotice && (
-          <div className="token-reward" aria-live="polite" aria-atomic="true">
-            <Sparkles size={15} aria-hidden="true" />
-            <span>{tokenNotice}</span>
-          </div>
-        )}
-      </div>
-      <span className="sr-only" aria-live="polite">
-        {activeIdea
-          ? `برای این ایده ${formatNumber(totalTokens)} توکن گرفته‌اید.`
-          : ""}
-      </span>
-
       {screen === "home" && (
         <section className="home-view">
           <div className="home-heading landing-heading" id="about">
@@ -2370,7 +1273,14 @@ export default function Home() {
               ایده‌هایتان را به اشتراک بگذارید؛ فردایی بهتر را با هم بسازیم.
             </p>
           </div>
-          <div className="composer-wrap landing-composer" id="how-it-works">
+          <form
+            className="composer-wrap landing-composer"
+            id="how-it-works"
+            onSubmit={(event) => {
+              event.preventDefault();
+              startIdeaMentor();
+            }}
+          >
             <div className="landing-entry-row">
               <span className="landing-idea-icon">
                 <Lightbulb size={42} strokeWidth={1.7} aria-hidden="true" />
@@ -2396,72 +1306,35 @@ export default function Home() {
                     setSeed(event.target.value);
                     setFormError("");
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      startIdeaMentor();
+                    }
+                  }}
                   rows={1}
                   maxLength={600}
                   dir="auto"
                   aria-describedby="seed-hint seed-error"
                 />
+                <button
+                  type="submit"
+                  className="landing-send-button"
+                  disabled={
+                    seedSpeechBusy ||
+                    !seed.trim() ||
+                    !canCreateIdea(state, registrations.length)
+                  }
+                  aria-label="ارسال ایده"
+                  title="ارسال ایده"
+                >
+                  <Send size={19} aria-hidden="true" />
+                </button>
                 <SpeechInputControl
                   onTranscript={appendSeedTranscript}
                   onBusyChange={setSeedSpeechBusy}
                 />
               </div>
-            </div>
-            <div
-              className="landing-choice-actions"
-              role="group"
-              aria-label="انتخاب مسیر ایده"
-            >
-              <button
-                type="button"
-                className="primary-button landing-choice landing-choice-primary"
-                onClick={startIdea}
-                disabled={seedSpeechBusy || !seed.trim() || !canCreateIdea(state, registrations.length)}
-              >
-                <span className="landing-choice-icon">
-                  <Sprout size={24} strokeWidth={1.8} aria-hidden="true" />
-                </span>
-                <span className="landing-choice-copy">
-                  <b>توسعهٔ ایده</b>
-                  <small>قدم‌به‌قدم، با راهنمایی هوشمند</small>
-                </span>
-              </button>
-              <button
-                type="button"
-                className="landing-choice landing-choice-secondary"
-                onClick={() => startStructuredRegistration()}
-                disabled={
-                  seedSpeechBusy ||
-                  !registrations.some(hasUnfinishedStructuredRegistration) &&
-                  !canCreateIdea(state, registrations.length)
-                }
-              >
-                <span className="landing-choice-icon">
-                  <FileText size={22} strokeWidth={1.8} aria-hidden="true" />
-                </span>
-                <span className="landing-choice-copy">
-                  <b>
-                    {registrations.some(hasUnfinishedStructuredRegistration)
-                      ? "ادامهٔ ثبت ایده"
-                      : "تکمیل فرم ثبت"}
-                  </b>
-                  <small>فرم ثبت ایده را باز کنید</small>
-                </span>
-              </button>
-              <button
-                type="button"
-                className="landing-choice landing-choice-secondary landing-choice-guided"
-                onClick={startIdeaMentor}
-                disabled={seedSpeechBusy || !seed.trim() || !canCreateIdea(state, registrations.length)}
-              >
-                <span className="landing-choice-icon">
-                  <MessageCircle size={22} strokeWidth={1.8} aria-hidden="true" />
-                </span>
-                <span className="landing-choice-copy">
-                  <b>ثبت ایده</b>
-                  <small>با گفت‌وگوی راهنمای هوشمند</small>
-                </span>
-              </button>
             </div>
             <div className="composer-meta landing-composer-meta">
               <span id="seed-hint">
@@ -2482,10 +1355,10 @@ export default function Home() {
             )}
             {!canCreateIdea(state, registrations.length) && (
               <p className="capacity-note">
-                به سقف سه ثبت در این مرورگر رسیده‌اید. برای ادامه یکی از ثبت‌های ذخیره‌شده را باز کنید.
+                به سقف سه ثبت رسیده‌اید. برای ادامه یکی از ثبت‌های قبلی را باز کنید.
               </p>
             )}
-          </div>
+          </form>
           <div className="landing-benefits" id="benefits">
             <div className="landing-benefit">
               <Users size={27} strokeWidth={2.2} aria-hidden="true" />
@@ -2584,19 +1457,24 @@ export default function Home() {
               aria-live="polite"
               aria-relevant="additions"
             >
-              {ideaMentorMessages.map((message, index) => (
-                <div
-                  className={`mentor-chat-row${message.role === "user" ? " is-user" : " is-mentor"}`}
-                  key={`${message.role}-${index}`}
-                >
-                  {message.role === "assistant" && (
-                    <span className="mentor-chat-mini-avatar" aria-hidden="true">
-                      <Sparkles size={13} />
-                    </span>
-                  )}
-                  <p dir="auto"><bdi>{message.content}</bdi></p>
-                </div>
-              ))}
+              {ideaMentorMessages.map((message, index) => {
+                const displayContent = message.role === "assistant"
+                  ? toPersianDigits(message.content)
+                  : message.content;
+                return (
+                  <div
+                    className={`mentor-chat-row${message.role === "user" ? " is-user" : " is-mentor"}`}
+                    key={`${message.role}-${index}`}
+                  >
+                    {message.role === "assistant" && (
+                      <span className="mentor-chat-mini-avatar" aria-hidden="true">
+                        <Sparkles size={13} />
+                      </span>
+                    )}
+                    <p dir="auto"><bdi>{displayContent}</bdi></p>
+                  </div>
+                );
+              })}
               {ideaMentorBusy && (
                 <div className="mentor-chat-row is-mentor">
                   <span className="mentor-chat-mini-avatar" aria-hidden="true">
@@ -2742,14 +1620,14 @@ export default function Home() {
             کمی دربارهٔ <em>شما</em>
           </h1>
           <p className="form-intro">
-            نام شما نمایه‌تان را در همین مرورگر مشخص می‌کند. شمارهٔ همراه و کد ملی فقط برای گذر از این مرحله درخواست می‌شوند.
+            نام شما برای نمایش در نمایه استفاده می‌شود. شمارهٔ همراه و کد ملی فقط برای گذر از این مرحله درخواست می‌شوند.
           </p>
           <div className="privacy-panel">
             <ShieldCheck size={19} />
             <p>
               <b>یادآوری حریم خصوصی</b>
               <br />
-              پیامکی ارسال نمی‌شود و هیچ سرویس احراز هویتی فراخوانی نمی‌شود. کد ملی و شمارهٔ همراه شما ذخیره یا ارسال نمی‌شوند و پس از این مرحله کنار گذاشته می‌شوند. فقط نام و وضعیت عبور از این مرحله در همین مرورگر می‌ماند.
+              پیامکی ارسال نمی‌شود و هیچ سرویس احراز هویتی فراخوانی نمی‌شود. کد ملی و شمارهٔ همراه شما نگهداری یا ارسال نمی‌شوند و پس از این مرحله کنار گذاشته می‌شوند. فقط نام و وضعیت عبور از این مرحله برای ادامه استفاده می‌شود.
             </p>
           </div>
           <form className="details-form" onSubmit={submitDetails} noValidate>
@@ -2778,7 +1656,7 @@ export default function Home() {
             <label>
               کد ملی
               <input
-                value={nationalId}
+                value={toPersianDigits(nationalId)}
                 onChange={(e) =>
                   setNationalId(
                     normalizeDigits(e.target.value).replace(/\D/g, ""),
@@ -2795,7 +1673,7 @@ export default function Home() {
             <label>
               شمارهٔ همراه
               <input
-                value={mobile}
+                value={toPersianDigits(mobile)}
                 onChange={(e) =>
                   setMobile(normalizeDigits(e.target.value).replace(/\D/g, ""))
                 }
@@ -2843,20 +1721,20 @@ export default function Home() {
             پیامک واقعی ارسال نمی‌شود. برای ادامه، هر عددی بین ۴ تا ۸ رقم وارد کنید؛ این کد هویت شما را تأیید نمی‌کند.
           </p>
           <div className="masked-line">
-            شمارهٔ همراه <bdi dir="ltr">{maskedMobile}</bdi>
+            شمارهٔ همراه <bdi dir="ltr">{toPersianDigits(maskedMobile)}</bdi>
           </div>
           <form className="details-form" onSubmit={verifyCode} noValidate>
             <label htmlFor="verification-code">
               کد ادامه
               <input
                 id="verification-code"
-                value={code}
+                value={toPersianDigits(code)}
                 onChange={(e) =>
                   setCode(normalizeDigits(e.target.value).replace(/\D/g, "").slice(0, 8))
                 }
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                placeholder="برای نمونه: ۱۲۳۴"
+                placeholder="کد ۴ رقمی"
                 dir="ltr"
                 required
               />
@@ -2870,415 +1748,6 @@ export default function Home() {
               ادامه <ArrowRight size={18} />
             </button>
           </form>
-        </section>
-      )}
-
-      {screen === "intake" && activeIdea && (
-        <section className="journey-view intake-view">
-          <button className="back-link intake-exit" onClick={() => setScreen("dashboard")}>
-            <ArrowLeft size={16} /> ذخیره و خروج
-          </button>
-          <div className="journey-head intake-head" id="intake-stage">
-            <div>
-              <div className="eyebrow intake-eyebrow">
-                <span className="eyebrow-line" />
-                گام ۱ · ثبت اولیه
-              </div>
-              <h1>
-                بیایید ایده‌تان را <em>شکل بدهیم</em>
-              </h1>
-              <p className="intake-intro">
-                یک ایدهٔ خوب می‌تواند تغییری ایجاد کند. ایده‌تان را با واژه‌های خودتان برایمان بنویسید.
-              </p>
-            </div>
-            <span className="step-count">
-              {formatNumber(Math.min(initialIndex + 1, 5))} <span>/ {formatNumber(5)}</span>
-            </span>
-          </div>
-          <div
-            className="progress-track"
-            role="progressbar"
-            aria-label="پیشرفت ثبت اولیه"
-            aria-valuemin={0}
-            aria-valuemax={5}
-            aria-valuenow={Math.min(initialIndex, 5)}
-          >
-            <span
-              style={{ width: `${Math.min((initialIndex / 5) * 100, 100)}%` }}
-            />
-          </div>
-          <div className="mentor-layout intake-layout">
-            <div className="mentor-main intake-main" id="intake-conversation">
-              <div className="mentor-label intake-mentor-label">
-                <span className="mentor-avatar">
-                  <Lightbulb size={26} strokeWidth={1.8} aria-hidden="true" />
-                </span>
-                <span>گفت‌وگو دربارهٔ ایده</span>
-                {mentorMode === "demo" && (
-                  <span className="mentor-mode-badge">حالت نمایشی</span>
-                )}
-                <span className="intake-start-badge">از اینجا شروع کنید</span>
-              </div>
-              <div className="mentor-message intake-mentor-message" aria-live="polite">
-                {!busy && !openingBusy && <Sparkles size={16} aria-hidden="true" />}
-                {busy || openingBusy ? (
-                  <span className="thinking">
-                    <i />
-                    <i />
-                    <i /> در حال آماده‌کردن پرسش متناسب با ایده‌ات
-                  </span>
-                ) : (
-                  mentorMessage.slice(0, 240)
-                )}
-              </div>
-              <div className="question-card">
-                <div className="intake-question-heading">
-                  <span className="intake-question-icon">
-                    <CircleHelp size={25} aria-hidden="true" />
-                  </span>
-                  <div>
-                    <span className="question-kicker">
-                      {initialIndex < 5
-                        ? `پرسش ${formatNumber(initialIndex + 1)} از ${formatNumber(5)}`
-                        : "آمادهٔ بازبینی"}
-                    </span>
-                    {initialIndex < 5 && initialQuestionReady && (
-                      <p className="question-context">
-                        {currentQuestion.questionContext}
-                      </p>
-                    )}
-                    <h2 aria-live="polite" aria-atomic="true">
-                      {initialIndex < 5
-                        ? initialQuestionReady
-                          ? currentQuestion.question
-                          : openingBusy
-                            ? "داریم نقطهٔ شروع ایده‌ات را بررسی می‌کنیم."
-                            : "پرسش آغازین هنوز آماده نشده است."
-                        : "خلاصهٔ اولیهٔ ایده آماده است."}
-                    </h2>
-                  </div>
-                </div>
-                {initialIndex < 5 && !initialQuestionReady ? (
-                  <div className="pending-answer">
-                    {formError && (
-                      <p className="inline-error" role="alert">
-                        {formError}
-                      </p>
-                    )}
-                    {!openingBusy && (
-                      <button
-                        className="primary-button"
-                        onClick={() => {
-                          openingRequestRef.current = "";
-                          setFormError("");
-                          setOpeningAttempt((attempt) => attempt + 1);
-                        }}
-                      >
-                        دوباره تلاش کنید <ArrowRight size={18} />
-                      </button>
-                    )}
-                  </div>
-                ) : initialIndex < 5 &&
-                activeIdea.pendingTurn?.stage === "initial" ? (
-                  <div className="pending-answer">
-                    <p className="review-hint">
-                      پاسخ شما ذخیره شده است:
-                    </p>
-                    <p dir="auto">
-                      <bdi>{activeIdea.pendingTurn.answer}</bdi>
-                    </p>
-                    {formError && (
-                      <p className="inline-error" role="alert">
-                        {formError}
-                      </p>
-                    )}
-                    <button
-                      className="primary-button"
-                      onClick={() => answerCurrent("initial")}
-                      disabled={busy}
-                    >
-                      تلاش دوباره <ArrowRight size={18} />
-                    </button>
-                    {pendingAnswer && (
-                      <button
-                        className="text-button"
-                        onClick={() => editAnswer(activeIdea, pendingAnswer)}
-                        disabled={busy}
-                      >
-                        ویرایش پاسخ
-                      </button>
-                    )}
-                  </div>
-                ) : initialIndex < 5 ? (
-                  <>
-                    <label className="sr-only" htmlFor="initial-answer">
-                      پاسخ شما
-                    </label>
-                    <textarea
-                      id="initial-answer"
-                      value={draftAnswer || activeIdea.draftAnswer || ""}
-                      onChange={(e) => {
-                        setDraftAnswer(e.target.value);
-                        updateIdea({
-                          ...activeIdea,
-                          draftAnswer: e.target.value,
-                        });
-                      }}
-                      rows={4}
-                      maxLength={1500}
-                      dir="auto"
-                      placeholder="با آرامش بنویسید؛ چند جملهٔ صادقانه کافی است."
-                    />
-                    <div className="answer-tools">
-                      <button
-                        className="subtle-button"
-                        onClick={() =>
-                          answerCurrent(
-                            "initial",
-                            "هنوز مطمئن نیستم. پیش از تصمیم‌گیری می‌خواهم بیشتر بدانم.",
-                          )
-                        }
-                      >
-                        هنوز مطمئن نیستم <CircleHelp size={15} />
-                      </button>
-                      <span>
-                        {formatNumber((draftAnswer || activeIdea.draftAnswer || "").length)}
-                        /{formatNumber(1500)}
-                      </span>
-                    </div>
-                    {formError && (
-                      <p className="inline-error" role="alert">
-                        {formError}
-                      </p>
-                    )}
-                    <button
-                      className="primary-button"
-                      onClick={() => answerCurrent("initial")}
-                      disabled={busy}
-                    >
-                      ثبت پاسخ <ArrowRight size={18} />
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <p className="review-hint">
-                      پیش از تأیید ثبت اولیه، این خلاصه را بررسی و ویرایش کنید.
-                    </p>
-                    <textarea
-                      value={
-                        reviewDraft.summary ??
-                        displayIntakeSummary(activeIdea)
-                      }
-                      onChange={(e) =>
-                        setReviewDraft({
-                          ...reviewDraft,
-                          summary: e.target.value,
-                        })
-                      }
-                      rows={8}
-                      aria-label="ویرایش خلاصهٔ اولیهٔ ایده"
-                      dir="auto"
-                    />
-                    {formError && (
-                      <p className="inline-error" role="alert">
-                        {formError}
-                      </p>
-                    )}
-                    <button className="primary-button" onClick={confirmInitial}>
-                      تأیید ثبت اولیه <Check size={18} />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-            <aside className="journey-side intake-side">
-              <div className="intake-starting-point">
-                <div className="intake-starting-icon">
-                  <Sprout size={24} aria-hidden="true" />
-                </div>
-                <div className="intake-starting-copy">
-                  <div className="side-section-title">
-                    <span>نقطهٔ شروع شما</span>
-                  </div>
-                  {seedEditOpen ? (
-                    <form
-                      className="intake-seed-edit"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        const nextSeed = seedEditDraft.trim();
-                        if (!nextSeed) {
-                          setFormError("ایدهٔ اولیه نمی‌تواند خالی باشد.");
-                          return;
-                        }
-                        const title = nextSeed
-                          .replace(/\s+/g, " ")
-                          .slice(0, 48)
-                          .replace(/[.!?؟]$/, "") || "ایدهٔ بدون عنوان";
-                        updateIdea({
-                          ...activeIdea,
-                          seed: nextSeed,
-                          title,
-                          ...(activeIdea.intakeIndex === 0 &&
-                          !activeIdea.pendingTurn &&
-                          activeIdea.mentorNextQuestion?.stage === "initial" &&
-                          activeIdea.mentorNextQuestion.index === 0
-                            ? { mentorNextQuestion: undefined }
-                            : {}),
-                        });
-                        setSeedEditOpen(false);
-                        setFormError("");
-                      }}
-                    >
-                      <label className="sr-only" htmlFor="starting-point-edit">
-                        ویرایش ایدهٔ اولیه
-                      </label>
-                      <textarea
-                        id="starting-point-edit"
-                        value={seedEditDraft}
-                        onChange={(event) => {
-                          setSeedEditDraft(event.target.value);
-                          setFormError("");
-                        }}
-                        maxLength={1200}
-                        rows={3}
-                        required
-                        dir="auto"
-                      />
-                      {formError && (
-                        <p className="inline-error" role="alert">
-                          {formError}
-                        </p>
-                      )}
-                      <div className="intake-seed-edit-actions">
-                        <button
-                          className="subtle-button"
-                          type="button"
-                          onClick={() => {
-                            setSeedEditOpen(false);
-                            setFormError("");
-                          }}
-                        >
-                          انصراف
-                        </button>
-                        <button className="primary-button" type="submit">
-                          ذخیرهٔ ایده
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    <p className="seed-quote">
-                      “<bdi dir="auto">{activeIdea.seed}</bdi>”
-                    </p>
-                  )}
-                </div>
-                {!seedEditOpen && (
-                  <button
-                    className="intake-edit-seed"
-                    aria-label="ویرایش ایدهٔ اولیه"
-                    onClick={() => {
-                      setSeedEditDraft(activeIdea.seed);
-                      setSeedEditOpen(true);
-                      setFormError("");
-                    }}
-                  >
-                    <Pencil size={20} aria-hidden="true" />
-                  </button>
-                )}
-              </div>
-              <div className="side-divider" />
-              <div className="side-section-title">
-                <span>پیشرفت ثبت اولیه</span>
-                <span>{formatNumber(Math.min(initialIndex, 5))}/{formatNumber(5)}</span>
-              </div>
-              <div className="step-list">
-                {intakeQuestions.map((item, index) => (
-                  <div
-                    className={`step-item ${index < initialIndex ? "done" : index === initialIndex ? "current" : ""}`}
-                    key={item.section}
-                  >
-                    <span className="step-indicator">
-                      {index < initialIndex ? (
-                        <Check size={12} />
-                      ) : (
-                        formatNumber(index + 1)
-                      )}
-                    </span>
-                    <span>پرسش {formatNumber(index + 1)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="token-mini intake-token-mini" id="intake-tokens">
-                <span className="token-glyph"><Sparkles size={16} aria-hidden="true" /></span>
-                <span>
-                  <b>{formatNumber(totalTokens)} توکن</b>
-                  <small>امتیاز مشارکت؛ غیررسمی</small>
-                </span>
-              </div>
-              <div className="answer-history">
-                {activeIdea.answers
-                  .filter((answer) =>
-                    intakeQuestions.some(
-                      (question) => question.section === answer.section,
-                    ),
-                  )
-                  .map((answer) => (
-                    <div className="answer-history-row" key={answer.section}>
-                      <span>
-                        پاسخ{" "}
-                        {formatNumber(
-                          intakeQuestions.findIndex(
-                            (question) => question.section === answer.section,
-                          ) + 1,
-                        )}
-                      </span>
-                      <button
-                        className="text-button"
-                        onClick={() => editAnswer(activeIdea, answer)}
-                        aria-label={`ویرایش پاسخ ${formatNumber(intakeQuestions.findIndex((question) => question.section === answer.section) + 1)}`}
-                      >
-                        ویرایش
-                      </button>
-                    </div>
-                  ))}
-              </div>
-              <details className="intake-privacy" id="intake-faq">
-                <summary>حریم خصوصی و نگهداری اطلاعات</summary>
-                <p>{labels.localNotice} پاسخ‌ها برای راهنمای هوشمند پردازش می‌شوند و اطلاعات هویتی و شمارهٔ همراه پیش از ارسال حذف می‌شوند.</p>
-              </details>
-            </aside>
-          </div>
-        </section>
-      )}
-
-      {screen === "initial-confirmed" && activeIdea && (
-        <section className="success-view">
-          <div className="success-icon">
-            <BadgeCheck size={32} aria-hidden="true" />
-          </div>
-          <div className="eyebrow">
-            <span className="eyebrow-line" />
-            ثبت اولیه تأیید شد
-          </div>
-          <h1>
-            ایده‌تان برای ادامه <em>محفوظ است</em>
-          </h1>
-          <p className="success-copy">
-            ثبت اولیهٔ شما کامل است و توسعهٔ بیشتر اختیاری است. می‌توانید همین حالا ادامه دهید یا بعداً از داشبورد برگردید.
-          </p>
-          <div className="submit-actions">
-            <button
-              className="primary-button"
-              onClick={() => beginDevelopment(activeIdea)}
-            >
-              ادامهٔ پرورش ایده <ArrowRight size={17} />
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setScreen("dashboard")}
-            >
-              بعداً از داشبورد ادامه می‌دهم <House size={17} />
-            </button>
-          </div>
         </section>
       )}
 
@@ -3334,9 +1803,13 @@ export default function Home() {
               >
                 <Users size={18} aria-hidden="true" /> جامعهٔ کاربری
               </button>
-              <a href="#workspace-faq">
+              <button
+                type="button"
+                disabled
+                title="پرسش‌های متداول در این بخش هنوز در دسترس نیستند."
+              >
                 <CircleHelp size={18} aria-hidden="true" /> پرسش‌های متداول
-              </a>
+              </button>
             </nav>
             <div className="dashboard-sidebar-promo">
               <Sprout size={23} aria-hidden="true" />
@@ -3395,7 +1868,7 @@ export default function Home() {
                   <Lightbulb size={22} aria-hidden="true" />
                 </span>
                 <div className="dashboard-stat-copy">
-                  <b>{formatNumber(activeIdeas.length)} <small>/ {formatNumber(3)}</small></b>
+                  <b>{formatNumber(activeIdeas)} <small>/ {formatNumber(3)}</small></b>
                   <span>ایده‌های در حال پیشرفت</span>
                   <small>
                     {formatNumber(Math.max(0, 3 - totalIdeas))} ایدهٔ دیگر در دسترس
@@ -3472,7 +1945,7 @@ export default function Home() {
                   <div>
                     <h2>ایده‌های شما</h2>
                     <span>
-                      {formatNumber(totalIdeas)} ایده در این دستگاه ذخیره شده
+                      {formatNumber(totalIdeas)} ایده در فهرست شما
                     </span>
                   </div>
                 </div>
@@ -3480,7 +1953,7 @@ export default function Home() {
                   <summary>
                     محل نگهداری اطلاعات <ChevronDown size={15} aria-hidden="true" />
                   </summary>
-                  <p>{labels.localNotice}</p>
+                  <p>{labels.privacyNotice}</p>
                 </details>
               </div>
           {totalIdeas === 0 ? (
@@ -3509,7 +1982,7 @@ export default function Home() {
                       <h3><bdi dir="auto">{idea.title}</bdi></h3>
                       <span className={`status-pill status-${idea.status}`}>
                         {idea.status === "submitted" && <Check size={12} />}
-                        {labels.statuses[idea.status]}
+                        ثبت قدیمی
                       </span>
                     </div>
                     <p className="idea-seed"><bdi dir="auto">{idea.seed}</bdi></p>
@@ -3566,54 +2039,6 @@ export default function Home() {
                     </details>
                   </div>
                   <div className="idea-actions">
-                    {idea.status === "submitted" &&
-                    hasCompletedDevelopment(idea) ? (
-                      <button
-                        className="secondary-button"
-                        onClick={() => {
-                          setActiveId(idea.id);
-                          setScreen("submitted");
-                        }}
-                      >
-                        مشاهدهٔ پیشنهاد <FileText size={16} />
-                      </button>
-                    ) : idea.status === "submitted" ? (
-                      <button
-                        className="secondary-button"
-                        onClick={() => routeToIdea(idea)}
-                      >
-                        ادامهٔ توسعهٔ ایده <ArrowRight size={16} />
-                      </button>
-                    ) : idea.status === "awaiting-confirmation" &&
-                      hasCompletedDevelopment(idea) ? (
-                      <button
-                        className="secondary-button"
-                        onClick={() => beginReview(idea)}
-                      >
-                        بازگشت به بازبینی <ArrowRight size={16} />
-                      </button>
-                    ) : idea.status === "awaiting-confirmation" ? (
-                      <button
-                        className="secondary-button"
-                        onClick={() => routeToIdea(idea)}
-                      >
-                        ادامهٔ توسعهٔ ایده <ArrowRight size={16} />
-                      </button>
-                    ) : (
-                      <button
-                        className="secondary-button"
-                        onClick={() => routeToIdea(idea)}
-                      >
-                        {idea.status === "initial"
-                          ? (idea.intakeIndex ?? 0) < 5
-                            ? "ادامهٔ ثبت اولیه"
-                            : "پرورش بیشتر ایده"
-                          : !hasCompletedDevelopment(idea)
-                            ? "ادامهٔ توسعهٔ ایده"
-                            : "ادامهٔ مسیر ایده"}
-                        <ArrowRight size={16} />
-                      </button>
-                    )}
                     <button
                       className="delete-idea-button"
                       onClick={() => deleteIdea(idea)}
@@ -3650,6 +2075,7 @@ export default function Home() {
                           به‌روزرسانی: {formatDate(registration.updatedAt)}
                         </span>
                         <span><FileText size={14} /> فرم ثبت ایده</span>
+                        <span><Sparkles size={14} /> {formatNumber(structuredScore(registration))} امتیاز</span>
                       </div>
                     </div>
                     <div className="idea-actions">
@@ -3676,7 +2102,7 @@ export default function Home() {
           {!canCreateIdea(state, registrations.length) && (
             <p className="limit-note">
               <LockKeyhole size={15} />
-              به سقف سه ثبت در این مرورگر رسیده‌اید. ایده‌ها و ثبت‌های موجود همچنان در این مرورگر می‌مانند.
+              به سقف سه ثبت رسیده‌اید. ایده‌ها و ثبت‌های قبلی همچنان در دسترس‌اند.
             </p>
           )}
             </section>
@@ -3707,17 +2133,13 @@ export default function Home() {
               </span>
             </aside>
           </div>
-          {(storageError || tokenNotice) && (
+          {storageError && (
             <div
-              className={`dashboard-feedback${storageError ? " is-warning" : ""}`}
-              role={storageError ? "alert" : "status"}
+              className="dashboard-feedback is-warning"
+              role="alert"
             >
-              {storageError ? (
-                <ShieldCheck size={18} aria-hidden="true" />
-              ) : (
-                <Sparkles size={18} aria-hidden="true" />
-              )}
-              <span>{storageError || tokenNotice}</span>
+              <ShieldCheck size={18} aria-hidden="true" />
+              <span>{storageError}</span>
               <a href="#workspace-faq">
                 اطلاعات بیشتر <ArrowUpRight size={15} aria-hidden="true" />
               </a>
@@ -3765,19 +2187,41 @@ export default function Home() {
             </div>
             <div className="mentor-chat-thread" aria-live="polite">
               <div className="mentor-chat-date">گفت‌وگوی امروز</div>
-              {mentorChatMessages.map((message, index) => (
-                <div
-                  className={`mentor-chat-row${message.role === "user" ? " is-user" : " is-mentor"}`}
-                  key={`${message.role}-${index}`}
-                >
-                  {message.role === "assistant" && (
-                    <span className="mentor-chat-mini-avatar" aria-hidden="true">
-                      <Sparkles size={13} />
-                    </span>
-                  )}
-                  <p dir="auto"><bdi>{message.content}</bdi></p>
-                </div>
-              ))}
+              {mentorChatMessages.map((message, index) => {
+                const displayContent = message.role === "assistant"
+                  ? toPersianDigits(message.content)
+                  : message.content;
+                const isRevealing = message.role === "assistant" &&
+                  mentorChatReveal?.messageIndex === index;
+                const words = isRevealing ? mentorWords(displayContent) : [];
+                const revealComplete = isRevealing &&
+                  mentorChatReveal.visibleWords >= words.length;
+                return (
+                  <div
+                    className={`mentor-chat-row${message.role === "user" ? " is-user" : " is-mentor"}`}
+                    key={`${message.role}-${index}`}
+                  >
+                    {message.role === "assistant" && (
+                      <span className="mentor-chat-mini-avatar" aria-hidden="true">
+                        <Sparkles size={13} />
+                      </span>
+                    )}
+                    <p dir="auto">
+                      {isRevealing ? (
+                        <>
+                          <span aria-hidden="true">
+                            {words.slice(0, mentorChatReveal.visibleWords).join("")}
+                          </span>
+                          {!revealComplete && <span className="mentor-chat-caret" aria-hidden="true" />}
+                          {revealComplete && <span className="sr-only">{displayContent}</span>}
+                        </>
+                      ) : (
+                        <bdi>{displayContent}</bdi>
+                      )}
+                    </p>
+                  </div>
+                );
+              })}
               {mentorChatBusy && (
                 <div className="mentor-chat-row is-mentor">
                   <span className="mentor-chat-mini-avatar" aria-hidden="true">
@@ -3833,7 +2277,7 @@ export default function Home() {
                 maxLength={1200}
                 rows={2}
                 placeholder="هرچه دوست داری از منتورت بپرس…"
-                aria-label="پیام شما به منتور"
+                  dir="rtl"
                 disabled={mentorChatBusy}
               />
               <button
@@ -3851,399 +2295,6 @@ export default function Home() {
             </p>
           </section>
         </div>
-      )}
-
-      {screen === "develop" && activeIdea && (
-        <section className="journey-view develop-view">
-          <button className="back-link" onClick={() => setScreen("dashboard")}>
-            <ArrowLeft size={16} /> ذخیره و خروج
-          </button>
-          <div className="journey-head">
-            <div>
-              <div className="eyebrow">
-                <span className="eyebrow-line" />
-                گام ۲ · توسعهٔ ایده
-              </div>
-              <h1>
-                ایده‌تان را <em>کاربردی کنید</em>
-              </h1>
-            </div>
-            <span className="step-count">
-              {formatNumber(Math.min(devIndex + 1, 10))} <span>/ {formatNumber(10)}</span>
-            </span>
-          </div>
-          <div
-            className="progress-track"
-            role="progressbar"
-            aria-label="پیشرفت توسعهٔ ایده"
-            aria-valuemin={0}
-            aria-valuemax={10}
-            aria-valuenow={Math.min(devIndex, 10)}
-          >
-            <span
-              style={{ width: `${Math.min((devIndex / 10) * 100, 100)}%` }}
-            />
-          </div>
-          <div className="mentor-layout">
-            <div className="mentor-main">
-              <div className="mentor-label">
-                <span className="mentor-avatar">
-                  <Sparkles size={16} />
-                </span>
-                <span>گفت‌وگو دربارهٔ ایده</span>
-                {mentorMode === "demo" && (
-                  <span className="mentor-mode-badge">حالت نمایشی</span>
-                )}
-              </div>
-              <div className="mentor-message" aria-live="polite">
-                {busy ? (
-                  <span className="thinking">
-                    <i />
-                    <i />
-                    <i /> در حال آماده‌کردن پرسش بعدی
-                  </span>
-                ) : (
-                  mentorMessage.slice(0, 240)
-                )}
-              </div>
-              <div className="question-card">
-                <span className="question-kicker">
-                  {devIndex < 10 ? displaySection(devQuestion.section) : "پیشنهاد آماده است"}
-                </span>
-                {devIndex < 10 && (
-                  <p className="question-context">{devQuestion.questionContext}</p>
-                )}
-                <h2 aria-live="polite" aria-atomic="true">
-                  {devIndex < 10
-                    ? devQuestion.question
-                    : "پایهٔ سنجیده‌ای برای پیشنهادتان آماده کرده‌اید."}
-                </h2>
-                {devIndex < 10 &&
-                activeIdea.pendingTurn?.stage === "development" ? (
-                  <div className="pending-answer">
-                    <p className="review-hint">
-                      پاسخ شما ذخیره شده است:
-                    </p>
-                    <p dir="auto">
-                      <bdi>{activeIdea.pendingTurn.answer}</bdi>
-                    </p>
-                    {formError && (
-                      <p className="inline-error" role="alert">
-                        {formError}
-                      </p>
-                    )}
-                    <button
-                      className="primary-button"
-                      onClick={() => answerCurrent("development")}
-                      disabled={busy}
-                    >
-                      تلاش دوباره <ArrowRight size={18} />
-                    </button>
-                    {pendingAnswer && (
-                      <button
-                        className="text-button"
-                        onClick={() => editAnswer(activeIdea, pendingAnswer)}
-                        disabled={busy}
-                      >
-                        ویرایش پاسخ
-                      </button>
-                    )}
-                  </div>
-                ) : devIndex < 10 ? (
-                  <>
-                    <label className="sr-only" htmlFor="development-answer">
-                      پاسخ شما
-                    </label>
-                    <textarea
-                      id="development-answer"
-                      value={draftAnswer || activeIdea.draftAnswer || ""}
-                      onChange={(e) => {
-                        setDraftAnswer(e.target.value);
-                        updateIdea({
-                          ...activeIdea,
-                          draftAnswer: e.target.value,
-                        });
-                      }}
-                      rows={4}
-                      maxLength={1500}
-                      dir="auto"
-                      placeholder="آنچه می‌دانید بنویسید یا مشخص کنید چه چیزی را باید بیشتر بررسی کنید."
-                    />
-                    <div className="answer-tools">
-                      <button
-                        className="subtle-button"
-                        onClick={() =>
-                          answerCurrent(
-                            "development",
-                            "هنوز مطمئن نیستم. از افراد درگیر می‌پرسم چه چیزی برایشان مناسب است.",
-                          )
-                        }
-                      >
-                        هنوز مطمئن نیستم / این راهکار برای من مناسب نیست <CircleHelp size={15} />
-                      </button>
-                      <span>
-                        {formatNumber((draftAnswer || activeIdea.draftAnswer || "").length)}
-                        /{formatNumber(1500)}
-                      </span>
-                    </div>
-                    {formError && (
-                      <p className="inline-error" role="alert">
-                        {formError}
-                      </p>
-                    )}
-                    <button
-                      className="primary-button"
-                      onClick={() => answerCurrent("development")}
-                      disabled={busy}
-                    >
-                      ثبت پاسخ <ArrowRight size={18} />
-                    </button>
-                    <p className="review-hint">
-                      پس از پاسخ به هر ده پرسش این مرحله، امکان بازبینی پرونده فعال می‌شود.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="review-hint">
-                      هر زمان اطلاعات تازه‌ای به دست آوردید، می‌توانید به هر بخشی برگردید و آن را کامل‌تر کنید.
-                    </p>
-                    <button
-                      className="primary-button"
-                      onClick={() => beginReview(activeIdea)}
-                    >
-                      بازبینی پیشنهاد <FileText size={18} />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-            <aside className="journey-side">
-              <div className="side-section-title">
-                <span>ایدهٔ در حال پیشرفت</span>
-                <Lightbulb size={16} />
-              </div>
-              <p className="seed-quote">“<bdi dir="auto">{activeIdea.seed}</bdi>”</p>
-              <div className="side-divider" />
-              <div className="side-section-title">
-                <span>راهنمای توسعهٔ ایده</span>
-                <span>{formatNumber(Math.min(devIndex, 10))}/{formatNumber(10)}</span>
-              </div>
-              <div className="step-list">
-                {developmentQuestions.map((item, index) => (
-                  <div
-                    className={`step-item ${index < devIndex ? "done" : index === devIndex ? "current" : ""}`}
-                    key={item.section}
-                  >
-                    <span className="step-indicator">
-                      {index < devIndex ? (
-                        <Check size={12} />
-                      ) : (
-                        formatNumber(index + 1)
-                      )}
-                    </span>
-                    <span>{displaySection(item.section)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="token-mini">
-                <span className="token-glyph"><Sparkles size={16} aria-hidden="true" /></span>
-                <span>
-                  <b>{formatNumber(totalTokens)} توکن</b>
-                  <small>۲ توکن برای هر پاسخ سنجیده · ۵ توکن برای تکمیل هر گام</small>
-                </span>
-              </div>
-              <div className="answer-history">
-                {activeIdea.answers.map((answer) => (
-                  <div className="answer-history-row" key={answer.section}>
-                    <span>{displaySection(answer.section)}</span>
-                    <button
-                      className="text-button"
-                      onClick={() => editAnswer(activeIdea, answer)}
-                      aria-label={`ویرایش پاسخ شما دربارهٔ ${displaySection(answer.section)}`}
-                    >
-                      ویرایش
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </aside>
-          </div>
-        </section>
-      )}
-
-      {screen === "review" &&
-        activeIdea &&
-        hasCompletedDevelopment(activeIdea) && (
-          <section className="review-view">
-          <button className="back-link" onClick={() => setScreen("dashboard")}>
-            <ArrowLeft size={16} /> ذخیره و خروج
-          </button>
-          <div className="eyebrow">
-            <span className="eyebrow-line" />
-            بازبینی نهایی
-          </div>
-          <h1>
-            ایدهٔ شما، <em>روشن و سنجیده</em>
-          </h1>
-          <p className="form-intro">
-            این پیش‌نویس بر پایهٔ پاسخ‌های شماست. عبارت «هنوز بررسی نشده است» بخش‌هایی را نشان می‌دهد که پرسش‌هایشان باز مانده‌اند. پیش از انتخاب گام بعدی، هر بخشی را ویرایش کنید.
-          </p>
-          <div className="review-origin">
-            <span>
-              <Users size={16} />
-              بر پایهٔ اطلاعاتی که شما وارد کرده‌اید
-            </span>
-            <p>
-              ایدهٔ اولیه: «<bdi dir="auto">{activeIdea.seed}</bdi>»
-            </p>
-          </div>
-          <div className="proposal-grid">
-            {[
-              ["title", "عنوان پیشنهاد"],
-              ["summary", "خلاصهٔ کوتاه"],
-              ["problem", "مسئله و شواهد"],
-              ["beneficiaries", "افراد بهره‌مند"],
-              ["solution", "راهکار پیشنهادی"],
-              ["impact", "تأثیر اجتماعی مورد انتظار"],
-              ["evidence", "شواهد و فرض‌ها"],
-              ["feasibility", "امکان‌پذیری و منابع"],
-              ["pilot", "اجرای آزمایشی و گام‌های بعدی"],
-              ["measurement", "سنجش نتایج"],
-              ["risks", "خطرها و راه‌های کاهش آن‌ها"],
-              ["openQuestions", "پرسش‌های بی‌پاسخ"],
-            ].map(([key, title]) => (
-              <label className="proposal-field" key={key}>
-                {title}
-                <textarea
-                  value={displayProposalText(reviewDraft[key] ?? "")}
-                  onChange={(e) =>
-                    updateProposalField(activeIdea, key, e.target.value)
-                  }
-                  maxLength={key === "title" ? 80 : 3000}
-                  dir="auto"
-                  rows={
-                    key === "summary" || key === "problem" || key === "solution"
-                      ? 3
-                      : 2
-                  }
-                />
-              </label>
-            ))}
-          </div>
-          <div className="proposal-attribution">
-            <Sparkles size={16} />
-            <span>
-              جوانه پاسخ‌های شما را مرتب کرده است. اطلاعات از نوشته‌های خودتان می‌آیند؛ هیچ آمار، همکاری یا نتیجه‌ای ساخته نشده است.
-            </span>
-          </div>
-          {activeIdea.status === "awaiting-confirmation" &&
-            activeIdea.confirmationDeadlineAt && (
-              <div className="deadline-callout">
-                <Clock3 size={18} />
-                <div>
-                  <b>
-                    مهلت بازبینی: {formatDate(activeIdea.confirmationDeadlineAt)}
-                  </b>
-                  <span>
-                    {formatNumber(remainingHours)}{" "}
-                    ساعت باقی مانده است. اگر تا آن زمان پیشنهاد را تأیید یا ویرایش نکنید، پس از پایان مهلت و در نخستین باری که برنامه را باز کنید، وضعیت آن در همین مرورگر «ارسال‌شده» می‌شود.
-                  </span>
-                </div>
-              </div>
-            )}
-          <div className="submit-actions">
-            <button
-              className="secondary-button"
-              onClick={() => {
-                saveProposal(activeIdea);
-                setScreen("dashboard");
-              }}
-            >
-              ذخیره و بازگشت <ArrowLeft size={16} />
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => submitProposal("later")}
-            >
-              ثبت با مهلت بازبینی ۷۲ ساعته <Clock3 size={16} />
-            </button>
-            <button
-              className="primary-button"
-              onClick={() => submitProposal("now")}
-            >
-              تأیید و ثبت نهایی <Send size={17} />
-            </button>
-          </div>
-          <p className="local-limit-note">
-            این نسخه پیشنهاد را فقط در همین مرورگر نگه می‌دارد و چیزی برای برگزارکنندگان ارسال نمی‌کند. مهلت ۷۲ ساعته دقیق است؛ چون زمان‌سنجی در پس‌زمینه انجام نمی‌شود، پایان مهلت هنگام بازبودن برنامه یا در بارگذاری بعدی بررسی می‌شود.
-          </p>
-          </section>
-        )}
-
-      {screen === "submitted" && activeIdea && (
-        <section className="success-view">
-          <div className="success-icon">
-            <BadgeCheck size={32} />
-          </div>
-          <div className="eyebrow">
-            <span className="eyebrow-line" />
-            پیشنهاد ثبت شد
-          </div>
-          <h1>
-            {activeIdea.autoSubmitted
-              ? "مهلت بازبینی شما به پایان رسیده است."
-              : <>پیشنهاد شما <em>ثبت شده است</em></>}
-          </h1>
-          <p className="success-copy">
-            {activeIdea.autoSubmitted
-              ? "پس از پایان مهلت، با بازکردن دوبارهٔ برنامه وضعیت پیشنهاد در همین مرورگر به «ثبت‌شده» تغییر کرد."
-              : "پیشنهاد و زمان ثبت آن در همین مرورگر ذخیره شده‌اند."}
-          </p>
-          <div className="submitted-card">
-            <div>
-              <span>ایده</span>
-              <b><bdi dir="auto">{activeIdea.title}</bdi></b>
-            </div>
-            <div>
-              <span>زمان ثبت</span>
-              <b>
-                {activeIdea.submittedAt
-                  ? formatDate(activeIdea.submittedAt)
-                  : "ذخیره‌شده در این مرورگر"}
-              </b>
-            </div>
-            <div>
-              <span>توکن‌های دریافت‌شده</span>
-              <b>
-                {formatNumber(activeIdea.tokens.reduce(
-                  (sum, entry) => sum + entry.amount,
-                  0,
-                ))}{" "}
-                توکن <small>· امتیاز مشارکت و غیررسمی</small>
-              </b>
-            </div>
-          </div>
-          <div className="submitted-proposal">
-            <h2><bdi dir="auto">{activeIdea.proposal.title || activeIdea.title}</bdi></h2>
-            {Object.entries(activeIdea.proposal)
-              .filter(([key, value]) => key !== "title" && value.trim())
-              .map(([key, value]) => (
-                <section key={key}>
-                  <h3>{proposalLabels[key] ?? "بخش دیگر"}</h3>
-                  <p><bdi dir="auto">{displayProposalText(value)}</bdi></p>
-                </section>
-              ))}
-          </div>
-          <button
-            className="primary-button"
-            onClick={() => setScreen("dashboard")}
-          >
-            بازگشت به ایده‌های من <ArrowLeft size={17} />
-          </button>
-          <p className="local-limit-note">
-            این پیشنهاد فقط در همین مرورگر ذخیره شده و برای برگزارکنندگان رویداد ارسال نشده است.
-          </p>
-        </section>
       )}
 
       <footer className="app-footer">

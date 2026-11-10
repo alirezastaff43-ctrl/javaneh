@@ -4,6 +4,7 @@ import {
   formatNumber,
   isEnglishText,
   normalizeDigits,
+  toPersianDigits,
 } from "./locale";
 
 describe("Persian localization helpers", () => {
@@ -20,6 +21,14 @@ describe("Persian localization helpers", () => {
   it("formats interface numbers with Persian digits", () => {
     expect(formatNumber(1200)).toBe("۱٬۲۰۰");
     expect(formatNumber(72)).toBe("۷۲");
+    expect(formatNumber(Number.NaN)).toBe("نامشخص");
+    expect(formatNumber(Number.POSITIVE_INFINITY)).toBe("نامشخص");
+  });
+
+  it("converts Western and Arabic digits in displayed text", () => {
+    expect(toPersianDigits("۳ مورد، 12 سؤال، ٤ پاسخ")).toBe(
+      "۳ مورد، ۱۲ سؤال، ۴ پاسخ",
+    );
   });
 
   it("accepts English text and rejects non-Latin scripts in mentor copy", () => {

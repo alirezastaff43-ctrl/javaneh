@@ -1,3 +1,5 @@
+import { WORKBOOKS } from "./workbook-forms";
+
 export const STRUCTURED_STORAGE_KEY = "javaneh-structured-registration-v1";
 
 export const REGISTRATION_STEPS = [
@@ -41,6 +43,17 @@ export type WorkbookProgress = {
   status: "locked" | "available" | "draft" | "submitted";
   step: string;
   answers: WorkbookAnswers;
+  followups: Record<string, WorkbookFollowup>;
+};
+
+export type WorkbookFollowup = {
+  status: "needs-more" | "sufficient";
+  sourceAnswer: string;
+  reply: string;
+  questions: string[];
+  answers: string[];
+  index: number;
+  draft: string;
 };
 
 export type StructuredRegistrationData = {
@@ -78,6 +91,7 @@ export type StructuredRegistration = {
   activeFlow: RegistrationFlow;
   data: StructuredRegistrationData;
   workbooks: Record<WorkbookFlow, WorkbookProgress>;
+  scoreAwards: Record<string, number>;
   createdAt: string;
   updatedAt: string;
   submittedAt?: string;
@@ -168,7 +182,7 @@ export const STEP_TITLES: Record<RegistrationStep, string> = {
   intro: "شروع فرم", education: "مقطع تحصیلی", contact: "اطلاعات اصلی", problem: "مسئله یا اتفاق",
   place: "محل مشاهدهٔ مسئله", better: "تصویر وضعیت بهتر", action: "تغییر یا اقدام پیشنهادی",
   refine: "مرور پاسخ پیشنهادی", outcomes: "پیامدهای پیشنهاد", groups: "گروه‌های بهره‌مند",
-  axis: "محور ایده", title: "عنوان ایده", extra: "اطلاعات تکمیلی", review: "مرور نهایی و ثبت محلی",
+  axis: "محور ایده", title: "عنوان ایده", extra: "اطلاعات تکمیلی", review: "مرور نهایی و ثبت",
 };
 
 export function emptyRegistrationData(): StructuredRegistrationData {
@@ -191,6 +205,7 @@ export function createStructuredDraft(now = new Date()): StructuredRegistration 
     activeFlow: "F",
     data: emptyRegistrationData(),
     workbooks: emptyWorkbookProgress(),
+    scoreAwards: {},
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -198,10 +213,10 @@ export function createStructuredDraft(now = new Date()): StructuredRegistration 
 
 export function emptyWorkbookProgress(): Record<WorkbookFlow, WorkbookProgress> {
   return {
-    C: { status: "locked", step: "C01", answers: {} },
-    P: { status: "locked", step: "P01", answers: {} },
-    S: { status: "locked", step: "S01", answers: {} },
-    E: { status: "locked", step: "E01", answers: {} },
+    C: { status: "locked", step: "C01", answers: {}, followups: {} },
+    P: { status: "locked", step: "P01", answers: {}, followups: {} },
+    S: { status: "locked", step: "S01", answers: {}, followups: {} },
+    E: { status: "locked", step: "E01", answers: {}, followups: {} },
   };
 }
 
@@ -258,11 +273,47 @@ export function normalizeRegistrationStore(value: unknown): StructuredRegistrati
       activeFlow,
       data: normalizeRegistrationData(candidate.data),
       workbooks,
+      scoreAwards: normalizeScoreAwards(candidate.scoreAwards),
       createdAt: validDate(candidate.createdAt), updatedAt: validDate(candidate.updatedAt),
     };
     if (status === "submitted") normalized.submittedAt = validDate(candidate.submittedAt);
     return [normalized];
   });
+}
+
+function normalizeScoreAwards(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, 100)
+      .filter(([key, amount]) =>
+        /^[a-zA-Z][a-zA-Z0-9:_-]{0,99}$/.test(key) &&
+        Number.isInteger(amount) &&
+        Number(amount) > 0 &&
+        Number(amount) <= 10,
+      ),
+  ) as Record<string, number>;
+}
+
+export function awardStructuredPoints(
+  registration: StructuredRegistration,
+  key: string,
+  amount: number,
+): StructuredRegistration {
+  if (
+    !/^[a-zA-Z][a-zA-Z0-9:_-]{0,99}$/.test(key) ||
+    Object.prototype.hasOwnProperty.call(registration.scoreAwards, key)
+  ) return registration;
+  const boundedAmount = Math.max(0, Math.min(10, Math.floor(amount)));
+  if (!boundedAmount) return registration;
+  return {
+    ...registration,
+    scoreAwards: { ...registration.scoreAwards, [key]: boundedAmount },
+  };
+}
+
+export function structuredScore(registration: StructuredRegistration): number {
+  return Object.values(registration.scoreAwards).reduce((total, amount) => total + amount, 0);
 }
 
 function normalizeActiveFlow(
@@ -305,6 +356,7 @@ function normalizeWorkbookProgress(
         ? item.step.slice(0, 3)
         : `${flow}01`,
       answers: normalizeWorkbookAnswers(item.answers),
+      followups: normalizeWorkbookFollowups(item.followups, flow),
     };
   }
   return defaults;
@@ -342,6 +394,45 @@ function normalizeWorkbookAnswers(value: unknown): WorkbookAnswers {
         ),
       );
     }
+  }
+  return normalized;
+}
+
+function normalizeWorkbookFollowups(
+  value: unknown,
+  flow: WorkbookFlow,
+): Record<string, WorkbookFollowup> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const normalized: Record<string, WorkbookFollowup> = {};
+  const questionPages = WORKBOOKS[flow].pages.filter((page) => page.kind === "questions");
+  for (const [pageId, item] of Object.entries(value).slice(0, questionPages.length)) {
+    if (!questionPages.some((page) => page.id === pageId) || !item || typeof item !== "object" || Array.isArray(item)) continue;
+    const candidate = item as Partial<WorkbookFollowup>;
+    const status = candidate.status === undefined ? "needs-more" : candidate.status;
+    if (
+      (status !== "needs-more" && status !== "sufficient") ||
+      typeof candidate.sourceAnswer !== "string" || candidate.sourceAnswer.length > 3000 ||
+      typeof candidate.reply !== "string" || candidate.reply.length > 240 ||
+      !Array.isArray(candidate.questions) ||
+      (status === "needs-more" && candidate.questions.length < 1) ||
+      (status === "sufficient" && candidate.questions.length !== 0) ||
+      candidate.questions.length > 3 ||
+      candidate.questions.some((question) => typeof question !== "string" || question.length > 600) ||
+      !Array.isArray(candidate.answers) || candidate.answers.length > candidate.questions.length ||
+      candidate.answers.some((answer) => typeof answer !== "string" || answer.length > 1500) ||
+      !Number.isInteger(candidate.index) || candidate.index !== candidate.answers.length ||
+      candidate.index < 0 || candidate.index > candidate.questions.length ||
+      typeof candidate.draft !== "string" || candidate.draft.length > 1500
+    ) continue;
+    normalized[pageId] = {
+      status,
+      sourceAnswer: candidate.sourceAnswer,
+      reply: candidate.reply,
+      questions: candidate.questions as string[],
+      answers: candidate.answers as string[],
+      index: candidate.index,
+      draft: candidate.draft,
+    };
   }
   return normalized;
 }

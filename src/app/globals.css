@@ -832,19 +832,6 @@ input:focus {
   grid-column: 1 / -1;
 }
 
-.structured-example-button {
-  justify-self: start;
-}
-
-.structured-example {
-  margin: 0;
-  padding: 12px 14px;
-  border-inline-start: 2px solid var(--warm);
-  color: var(--muted-strong);
-  background: rgb(231 183 125 / 7%);
-  font-size: 13px;
-}
-
 .structured-review-list {
   margin: 0;
   border-top: 1px solid var(--border-strong);
@@ -991,26 +978,6 @@ input:focus {
 
 .workbook-add-button {
   justify-self: start;
-}
-
-.workbook-example {
-  padding: 12px 14px;
-  border-inline-start: 2px solid var(--warm);
-  border-radius: var(--radius-sm);
-  color: var(--muted-strong);
-  background: rgb(231 183 125 / 7%);
-}
-
-.workbook-example summary {
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.workbook-example p {
-  margin: 11px 0 0;
-  font-size: 13px;
-  line-height: 1.8;
 }
 
 .workbook-review {
@@ -1389,6 +1356,62 @@ input:focus {
 
 .question-card {
   margin-block-start: 19px;
+}
+
+.workbook-followup-card {
+  max-width: 760px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.workbook-followup-reply {
+  margin-block-end: 16px;
+  padding: 10px 12px;
+  border-inline-start: 3px solid var(--teal);
+  color: var(--muted-strong);
+  background: rgb(7 20 18 / 36%);
+  font-size: 13px;
+}
+
+.workbook-followup-reply p {
+  margin: 4px 0 0;
+  color: var(--text);
+}
+
+.workbook-followup-heading {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.workbook-followup-heading > svg {
+  margin-block-start: 5px;
+  color: var(--teal);
+}
+
+.workbook-followup-heading h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.workbook-followup-card textarea {
+  min-height: 120px;
+}
+
+.workbook-followup-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.workbook-followup-loading svg {
+  animation: seed-speech-spin 900ms linear infinite;
 }
 
 .question-kicker {
@@ -3030,6 +3053,7 @@ input:focus {
   max-height: 240px;
   margin: 0;
   padding: 15px 21px;
+  padding-inline-start: 68px;
   padding-inline-end: 68px;
   overflow: hidden;
   border: 1px solid rgb(213 230 245 / 9%);
@@ -3039,7 +3063,37 @@ input:focus {
   box-shadow: inset 0 1px 1px rgb(255 255 255 / 5%);
   font-size: 17px;
   line-height: 1.8;
+  text-align: right;
   resize: none;
+}
+
+.landing-send-button {
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: 11px;
+  top: 11px;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgb(58 232 158 / 48%);
+  border-radius: 50%;
+  color: #05251c;
+  background: linear-gradient(135deg, #76ecad, #16c77a);
+  box-shadow: 0 5px 16px rgb(13 188 117 / 19%);
+  cursor: pointer;
+  transition: filter 160ms ease, transform 160ms ease, opacity 160ms ease;
+}
+
+.landing-send-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.landing-send-button:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.65);
+  opacity: 0.55;
 }
 
 .landing-composer .landing-seed-input::placeholder {
@@ -3431,9 +3485,17 @@ input:focus {
     height: 54px;
     min-height: 54px;
     padding: 11px 12px;
+    padding-inline-start: 54px;
     padding-inline-end: 54px;
     border-radius: 13px;
     font-size: 14px;
+  }
+
+  .landing-send-button {
+    inset-inline-start: 8px;
+    top: 9px;
+    width: 36px;
+    height: 36px;
   }
 
   .seed-speech-button {
@@ -5951,6 +6013,20 @@ input:focus {
   line-height: 1.85;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.mentor-chat-caret {
+  width: 2px;
+  height: 1em;
+  display: inline-block;
+  margin-inline-start: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: mentor-chat-caret-blink 900ms steps(2, start) infinite;
+}
+
+@keyframes mentor-chat-caret-blink {
+  to { visibility: hidden; }
 }
 
 .mentor-chat-row.is-user > p {
