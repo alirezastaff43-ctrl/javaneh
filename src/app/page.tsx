@@ -42,6 +42,12 @@ import {
   toPersianDigits,
 } from "@/lib/locale";
 import {
+  requestMentorApi,
+  resetMentorApiConnection,
+  useMentorApiDisabled,
+} from "@/lib/mentor-api";
+import { useFormLockState } from "@/lib/form-answer-validation";
+import {
   applyDeadlineTransitions,
   canCreateIdea,
   emptyState,
@@ -336,6 +342,8 @@ export default function Home() {
   const [ideaMentorDraft, setIdeaMentorDraft] = useState("");
   const [ideaMentorBusy, setIdeaMentorBusy] = useState(false);
   const [ideaMentorError, setIdeaMentorError] = useState("");
+  const mentorApiDisabled = useMentorApiDisabled();
+  const formLockState = useFormLockState();
   const ideaMentorBusyRef = useRef(false);
   const ideaMentorEndRef = useRef<HTMLDivElement>(null);
   const ideaMentorInputRef = useRef<HTMLTextAreaElement>(null);
@@ -593,38 +601,27 @@ export default function Home() {
       })),
     ].slice(0, 3);
     try {
-      const response = await fetch("/api/mentor/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const result = await requestMentorApi(
+        {
           messages: [
             ...mentorChatMessages.slice(1).slice(-11),
             { role: "user", content },
           ],
           ideas: registeredIdeas,
-        }),
-      });
-      const payload: unknown = await response.json();
-      const reply =
-        payload &&
-        typeof payload === "object" &&
-        "reply" in payload &&
-        typeof payload.reply === "string"
-          ? payload.reply
-          : null;
-      if (
-        !response.ok ||
-        reply === null
-      ) {
-        const error =
-          payload &&
-          typeof payload === "object" &&
-          "error" in payload &&
-          typeof payload.error === "string"
-            ? payload.error
-            : "پاسخ منتور آماده نشد. کمی بعد دوباره تلاش کن.";
-        throw new Error(error);
+        },
+        (payload): string | null =>
+          payload && typeof payload === "object" &&
+          "reply" in payload && typeof payload.reply === "string"
+            ? payload.reply
+            : null,
+      );
+      if (result.status !== "success") {
+        setMentorChatError(
+          result.status === "cancelled" ? "درخواست منتور لغو شد." : result.message,
+        );
+        return;
       }
+      const reply = result.data;
       setMentorChatMessages((current) => [
         ...current,
         { role: "user", content },
@@ -660,56 +657,38 @@ export default function Home() {
     setIdeaMentorMessages(messages);
 
     try {
-      const response = await fetch("/api/mentor/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const result = await requestMentorApi(
+        {
           purpose: "idea-registration",
           messages: messages.slice(-12),
           ideas: [],
-        }),
-      });
-      let payload: unknown;
-      try {
-        payload = await response.json();
-      } catch {
-        throw new Error("پاسخ منتور خوانده نشد؛ کمی بعد دوباره تلاش کن.");
+        },
+        (payload): { reply: string; stage: string; idea: string } | null => {
+          if (
+            !payload || typeof payload !== "object" ||
+            !("reply" in payload) || typeof payload.reply !== "string" ||
+            !("stage" in payload) || typeof payload.stage !== "string" ||
+            !["conversation", "write-idea", "confirm-registration", "not-now", "register"].includes(payload.stage)
+          )
+            return null;
+          return {
+            reply: payload.reply,
+            stage: payload.stage,
+            idea: "idea" in payload && typeof payload.idea === "string" ? payload.idea : "",
+          };
+        },
+      );
+      if (result.status === "disabled") {
+        startStructuredRegistration(ideaMentorIdea || seed || content);
+        return;
       }
-      const reply =
-        payload &&
-        typeof payload === "object" &&
-        "reply" in payload &&
-        typeof payload.reply === "string"
-          ? payload.reply
-          : null;
-      const stage =
-        payload &&
-        typeof payload === "object" &&
-        "stage" in payload &&
-        typeof payload.stage === "string"
-          ? payload.stage
-          : null;
-      const idea =
-        payload &&
-        typeof payload === "object" &&
-        "idea" in payload &&
-        typeof payload.idea === "string"
-          ? payload.idea
-          : "";
-      if (
-        !response.ok ||
-        reply === null ||
-        !["conversation", "write-idea", "confirm-registration", "not-now", "register"].includes(stage ?? "")
-      ) {
-        const error =
-          payload &&
-          typeof payload === "object" &&
-          "error" in payload &&
-          typeof payload.error === "string"
-            ? payload.error
-            : "پاسخ منتور آماده نشد؛ کمی بعد دوباره تلاش کن.";
-        throw new Error(error);
+      if (result.status === "retry") {
+        setIdeaMentorDraft(content);
+        setIdeaMentorError(result.message);
+        return;
       }
+      if (result.status === "cancelled") return;
+      const { reply, stage, idea } = result.data;
 
       if (
         stage === "register" &&
@@ -804,6 +783,21 @@ export default function Home() {
           <Sprout size={24} />
         </span>
         <span>فضای ایدهٔ شما در حال آماده‌شدن است…</span>
+      </main>
+    );
+
+  if (formLockState.locked)
+    return (
+      <main className="loading-screen" role="alert">
+        <span className="loading-mark">
+          <LockKeyhole size={24} aria-hidden="true" />
+        </span>
+        <h1>تکمیل فرم موقتاً محدود شده است</h1>
+        <p>پس از بیش از سه پاسخ نامعتبر، امکان تکمیل فرم تا ۱۲ ساعت متوقف می‌شود.</p>
+        <p>
+          زمان پایان محدودیت:{" "}
+          {new Date(formLockState.lockedUntil).toLocaleString("fa-IR")}
+        </p>
       </main>
     );
 
@@ -1531,9 +1525,14 @@ export default function Home() {
               </div>
             )}
             {ideaMentorError && (
-              <p className="mentor-chat-error" role="alert">
+              <div className="mentor-chat-error" role="alert">
                 {ideaMentorError}
-              </p>
+                {mentorApiDisabled && (
+                  <button type="button" className="text-button" onClick={resetMentorApiConnection}>
+                    تلاش دوباره برای اتصال
+                  </button>
+                )}
+              </div>
             )}
             <form
               className="mentor-chat-composer"
@@ -2253,9 +2252,14 @@ export default function Home() {
               </div>
             )}
             {mentorChatError && (
-              <p className="mentor-chat-error" role="alert">
+              <div className="mentor-chat-error" role="alert">
                 {mentorChatError}
-              </p>
+                {mentorApiDisabled && (
+                  <button type="button" className="text-button" onClick={resetMentorApiConnection}>
+                    تلاش دوباره برای اتصال
+                  </button>
+                )}
+              </div>
             )}
             <form
               className="mentor-chat-composer"

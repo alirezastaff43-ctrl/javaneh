@@ -30,6 +30,16 @@ import {
 } from "@/lib/structured-registration";
 import { formatNumber, isPersianText, toPersianDigits } from "@/lib/locale";
 import {
+  getFormLockState,
+  validateAnswerRelevance,
+} from "@/lib/form-answer-validation";
+import {
+  isMentorApiDisabled,
+  resetMentorApiConnection,
+  requestMentorApi,
+  useMentorApiDisabled,
+} from "@/lib/mentor-api";
+import {
   WORKBOOKS,
   WORKBOOK_FLOW_ORDER,
   getWorkbookPage,
@@ -106,6 +116,8 @@ export default function StructuredRegistrationForm({
 }: Props) {
   const [error, setError] = useState("");
   const [acceptedReview, setAcceptedReview] = useState(false);
+  const mentorDisabled = useMentorApiDisabled();
+  const answerValidationBusy = useRef(false);
   const guidedAnswerRef = useRef<MentorGuidedTextareaHandle>(null);
   const data = registration.data;
   const steps = visibleRegistrationSteps(data);
@@ -136,6 +148,8 @@ export default function StructuredRegistrationForm({
     const [followupBusy, setFollowupBusy] = useState(false);
     const [followupSpeechBusy, setFollowupSpeechBusy] = useState(false);
     const [followupRetry, setFollowupRetry] = useState(false);
+    const mentorDisabled = useMentorApiDisabled();
+    const answerValidationBusy = useRef(false);
     const currentRegistration = useRef(registration);
     currentRegistration.current = registration;
     const guidedAnswerRef = useRef<MentorGuidedTextareaHandle>(null);
@@ -189,6 +203,14 @@ export default function StructuredRegistrationForm({
           <p className="form-intro">
             ثبت اولیهٔ ایده تکمیل شده است. کارویژه‌ها را به‌ترتیب تکمیل کنید؛ پاسخ‌ها برای برگزارکننده ارسال نمی‌شوند. امتیاز فعلی: {formatNumber(structuredScore(registration))}
           </p>
+          {mentorDisabled && (
+            <div className="mentor-checking" role="status">
+              پرسش‌های تکمیلی منتور غیرفعال‌اند؛ می‌توانید کارویژه‌ها را با فرم ثابت ادامه دهید.
+              <button type="button" className="text-button" onClick={resetMentorApiConnection}>
+                تلاش دوباره برای اتصال
+              </button>
+            </div>
+          )}
           <div className="workbook-list">
             <article className="workbook-card">
               <div>
@@ -251,18 +273,15 @@ export default function StructuredRegistrationForm({
       if (scored !== current) update({ scoreAwards: scored.scoreAwards });
     }
 
-    async function mentorApprovesFollowup(followup: WorkbookFollowup): Promise<boolean> {
-      try {
-        const answer = [
-          `پاسخ اصلی: ${followup.sourceAnswer}`,
-          ...followup.questions.map((question, index) =>
-            `${question}\n${followup.answers[index] ?? ""}`,
-          ),
-        ].join("\n\n");
-        const response = await fetch("/api/mentor/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+    async function mentorApprovesFollowup(followup: WorkbookFollowup): Promise<boolean | null> {
+      const answer = [
+        `پاسخ اصلی: ${followup.sourceAnswer}`,
+        ...followup.questions.map((question, index) =>
+          `${question}\n${followup.answers[index] ?? ""}`,
+        ),
+      ].join("\n\n");
+      const result = await requestMentorApi(
+        {
             purpose: "workbook-followup",
             messages: [{
               role: "user",
@@ -276,18 +295,24 @@ export default function StructuredRegistrationForm({
               }),
             }],
             ideas: [],
-          }),
-        });
-        const payload: unknown = await response.json();
-        return Boolean(
-          response.ok && payload && typeof payload === "object" &&
-          "status" in payload && payload.status === "sufficient" &&
-          "questions" in payload && Array.isArray(payload.questions) &&
-          payload.questions.length === 0,
-        );
-      } catch {
-        return false;
+        },
+        (payload): boolean | null => {
+          if (
+            !payload || typeof payload !== "object" ||
+            !("status" in payload) ||
+            (payload.status !== "needs-more" && payload.status !== "sufficient") ||
+            !("questions" in payload) || !Array.isArray(payload.questions)
+          )
+            return null;
+          return payload.status === "sufficient" && payload.questions.length === 0;
+        },
+      );
+      if (result.status === "success") return result.data;
+      if (result.status === "retry") {
+        setFollowupRetry(true);
+        setError(result.message);
       }
+      return null;
     }
 
     function updateAnswers(key: string, value: WorkbookAnswerValue) {
@@ -392,13 +417,30 @@ export default function StructuredRegistrationForm({
 
     async function goNext(event: React.FormEvent<HTMLFormElement>) {
       event.preventDefault();
-      if (followupBusy || followupSpeechBusy) return;
+      if (getFormLockState().locked) return;
+      if (followupBusy || followupSpeechBusy || answerValidationBusy.current) return;
       if (page.kind === "questions") {
         const validation = validateWorkbookPage(page, progress.answers);
         if (validation) {
           setError(validation);
           return;
         }
+        const answerText = workbookPageFreeText(page, progress.answers);
+        if (answerText) {
+          answerValidationBusy.current = true;
+          const result = await validateAnswerRelevance({
+            kind: "answer",
+            seed: registration.data.problem.slice(0, 1200) || registration.data.title.slice(0, 1200),
+            question: page.question.slice(0, 600),
+            text: answerText,
+          });
+          answerValidationBusy.current = false;
+          if (!result.valid) {
+            setError(result.message);
+            return;
+          }
+        }
+        if (getFormLockState().locked) return;
         const guidedReady = await guidedAnswerRef.current?.review();
         if (guidedReady === false) return;
       }
@@ -412,6 +454,11 @@ export default function StructuredRegistrationForm({
       }
 
       const sourceAnswer = workbookPageAnswer(page, progress.answers);
+      if (isMentorApiDisabled()) {
+        recordPageScore(false);
+        advancePage();
+        return;
+      }
       const savedFollowup = progress.followups[page.id];
       if (savedFollowup?.sourceAnswer === sourceAnswer) {
         if (savedFollowup.status === "sufficient") {
@@ -423,7 +470,8 @@ export default function StructuredRegistrationForm({
           setFollowupBusy(true);
           const sufficient = await mentorApprovesFollowup(savedFollowup);
           setFollowupBusy(false);
-          recordPageScore(sufficient);
+          if (sufficient === null && !isMentorApiDisabled()) return;
+          recordPageScore(sufficient === true);
           advancePage();
           return;
         }
@@ -432,6 +480,19 @@ export default function StructuredRegistrationForm({
           setError("پاسخی بنویسید یا گزینهٔ «هنوز مطمئن نیستم» را انتخاب کنید.");
           return;
         }
+        answerValidationBusy.current = true;
+        const answerValidation = await validateAnswerRelevance({
+          kind: "answer",
+          seed: registration.data.problem.slice(0, 1200) || registration.data.title.slice(0, 1200),
+          question: savedFollowup.questions[savedFollowup.index].slice(0, 600),
+          text: answer.slice(0, 1500),
+        });
+        answerValidationBusy.current = false;
+        if (!answerValidation.valid) {
+          setError(answerValidation.message);
+          return;
+        }
+        if (getFormLockState().locked) return;
         const completedFollowup = {
           ...savedFollowup,
           answers: [...savedFollowup.answers, answer],
@@ -446,7 +507,8 @@ export default function StructuredRegistrationForm({
           setFollowupBusy(true);
           const sufficient = await mentorApprovesFollowup(completedFollowup);
           setFollowupBusy(false);
-          recordPageScore(sufficient);
+          if (sufficient === null && !isMentorApiDisabled()) return;
+          recordPageScore(sufficient === true);
           advancePage(updatedProgress);
         } else {
           update({ workbooks: { ...currentRegistration.current.workbooks, [flow]: updatedProgress } });
@@ -477,11 +539,8 @@ export default function StructuredRegistrationForm({
           };
         })
         .filter(({ answers }) => answers.length > 0);
-      try {
-        const response = await fetch("/api/mentor/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+      const result = await requestMentorApi(
+        {
             purpose: "workbook-followup",
             messages: [{
               role: "user",
@@ -496,29 +555,41 @@ export default function StructuredRegistrationForm({
               }),
             }],
             ideas: [],
-          }),
-        });
-        if (!response.ok) throw new Error("Follow-up request failed");
-        const payload: unknown = await response.json();
-        if (
-          !payload || typeof payload !== "object" ||
-          !("status" in payload) ||
-          (payload.status !== "needs-more" && payload.status !== "sufficient") ||
-          !("reply" in payload) || typeof payload.reply !== "string" ||
-          !("questions" in payload) || !Array.isArray(payload.questions) ||
-          (payload.status === "needs-more" && (payload.questions.length < 1 || payload.questions.length > 3)) ||
-          (payload.status === "sufficient" && payload.questions.length !== 0) ||
-          !isPersianText(payload.reply) || /[؟?]/u.test(payload.reply) ||
-          payload.questions.some((question) =>
-            typeof question !== "string" || question.length > 600 ||
-            !isPersianText(question) || (question.match(/[؟?]/gu) ?? []).length !== 1 ||
-            !/[؟?]$/u.test(question),
-          ) ||
-          new Set(payload.questions.map((question) =>
-            (question as string).toLocaleLowerCase("fa").replace(/[\s؟?.,؛;:!]+/gu, ""),
-          )).size !== payload.questions.length
-        ) throw new Error("Invalid follow-up response");
+        },
+        (payload): {
+          status: "needs-more" | "sufficient";
+          reply: string;
+          questions: string[];
+        } | null => {
+          if (
+            !payload || typeof payload !== "object" ||
+            !("status" in payload) ||
+            (payload.status !== "needs-more" && payload.status !== "sufficient") ||
+            !("reply" in payload) || typeof payload.reply !== "string" ||
+            !("questions" in payload) || !Array.isArray(payload.questions) ||
+            (payload.status === "needs-more" && (payload.questions.length < 1 || payload.questions.length > 3)) ||
+            (payload.status === "sufficient" && payload.questions.length !== 0) ||
+            !isPersianText(payload.reply) || /[؟?]/u.test(payload.reply) ||
+            payload.questions.some((question) =>
+              typeof question !== "string" || question.length > 600 ||
+              !isPersianText(question) || (question.match(/[؟?]/gu) ?? []).length !== 1 ||
+              !/[؟?]$/u.test(question),
+            ) ||
+            new Set(payload.questions.map((question) =>
+              (question as string).toLocaleLowerCase("fa").replace(/[\s؟?.,؛;:!]+/gu, ""),
+            )).size !== payload.questions.length
+          )
+            return null;
+          return {
+            status: payload.status,
+            reply: payload.reply,
+            questions: payload.questions as string[],
+          };
+        },
+      );
 
+      if (result.status === "success") {
+        const payload = result.data;
         const latest = currentRegistration.current;
         const latestProgress = latest.workbooks[flow];
         if (latest.activeFlow !== flow || workbookPageAnswer(page, latestProgress.answers) !== sourceAnswer) return;
@@ -533,12 +604,14 @@ export default function StructuredRegistrationForm({
         });
         recordPageScore(payload.status === "sufficient");
         if (payload.status === "sufficient") advancePage(updatedProgress);
-      } catch {
+      } else if (result.status === "retry") {
         setFollowupRetry(true);
-        setError("پرسش‌های فرعی آماده نشدند. پاسخ اصلی ذخیره شده است؛ دوباره تلاش کنید.");
-      } finally {
-        setFollowupBusy(false);
+        setError(`پرسش‌های فرعی آماده نشدند. پاسخ اصلی ذخیره شده است؛ ${result.message}`);
+      } else if (result.status === "disabled") {
+        recordPageScore(false);
+        advancePage();
       }
+      setFollowupBusy(false);
     }
 
     function goPrevious() {
@@ -818,10 +891,18 @@ export default function StructuredRegistrationForm({
         >
           <span style={{ width: `${progressPercent}%` }} />
         </div>
+        {mentorDisabled && (
+          <div className="mentor-checking" role="status">
+            ارتباط با منتور برقرار نشد؛ پرسش‌های تکمیلی غیرفعال‌اند و می‌توانید فرم ثابت را ادامه دهید.
+            <button type="button" className="text-button" onClick={resetMentorApiConnection}>
+              تلاش دوباره برای اتصال
+            </button>
+          </div>
+        )}
         <div className="structured-step-content">
           {page.guide && <p>{page.guide}</p>}
-          {page.kind === "questions" && !activeFollowup && (page.fields ?? []).map(renderField)}
-          {activeFollowup && (
+          {page.kind === "questions" && (!activeFollowup || mentorDisabled) && (page.fields ?? []).map(renderField)}
+          {activeFollowup && !mentorDisabled && (
             <section className="question-card workbook-followup-card" aria-label="پرسش تکمیلی">
               <div className="workbook-followup-reply" aria-live="polite">
                 <span className="mentor-label">همراهی دربارهٔ ایده</span>
@@ -955,6 +1036,33 @@ export default function StructuredRegistrationForm({
       .slice(0, 3000);
   }
 
+  function workbookPageFreeText(page: WorkbookPage, answers: WorkbookAnswers): string {
+    const text: string[] = [];
+    for (const field of page.fields ?? []) {
+      if (field.type === "long") {
+        text.push(readText(answers[field.key]));
+      } else if (field.type === "single") {
+        if (field.noteLabel) text.push(readText(answers[`${field.key}Note`]));
+      } else if (field.type === "multiple") {
+        text.push(readText(answers[`${field.key}Note`]));
+        const details = readStringRecord(answers[`${field.key}Details`]);
+        for (const value of readStringArray(answers[field.key])) {
+          text.push(details[value] ?? "");
+        }
+      } else if (field.type === "boxes") {
+        if (!answers[`${field.key}Unsure`])
+          field.labels.forEach((_, index) =>
+            text.push(readText(answers[`${field.key}${index}`])),
+          );
+      } else {
+        for (const item of readListItems(answers[field.key])) {
+          text.push(item.text, item.detail);
+        }
+      }
+    }
+    return text.map((answer) => answer.trim()).filter(Boolean).join("\n").slice(0, 1500);
+  }
+
   function updateData(patch: Partial<StructuredRegistrationData>) {
     setError("");
     const workbooks: StructuredRegistration["workbooks"] = registration.status === "submitted"
@@ -971,6 +1079,8 @@ export default function StructuredRegistrationForm({
 
   async function goNext(event?: React.FormEvent<HTMLFormElement>) {
     event?.preventDefault();
+    if (answerValidationBusy.current) return;
+    if (getFormLockState().locked) return;
     let mentorApproved = false;
     if (currentStep !== "review") {
       const validation = validateRegistrationStep(currentStep, data);
@@ -978,6 +1088,45 @@ export default function StructuredRegistrationForm({
         setError(validation);
         return;
       }
+      const answerToValidate = (() => {
+        switch (currentStep) {
+          case "problem":
+            return { kind: "seed" as const, question: "چه مسئله‌ای را می‌توان بهتر کرد؟", text: data.problem };
+          case "better":
+            return { kind: "answer" as const, question: "مهم‌ترین تغییر در وضعیت بهتر چیست؟", text: data.better };
+          case "action":
+            return { kind: "answer" as const, question: "چه کسی چه کاری را متفاوت انجام می‌دهد؟", text: data.action };
+          case "outcomes":
+            return data.outcomes.includes(otherOutcome)
+              ? { kind: "answer" as const, question: "چه نتیجهٔ دیگری از پیشنهاد انتظار می‌رود؟", text: data.outcomeOther }
+              : null;
+          case "groups":
+            return data.groups.includes(otherGroup)
+              ? { kind: "answer" as const, question: "کدام گروه از پیشنهاد بهره‌مند می‌شود؟", text: data.groupOther }
+              : null;
+          case "title":
+            return data.title.trim()
+              ? { kind: "answer" as const, question: "عنوان ایده چیست؟", text: data.title }
+              : null;
+          default:
+            return null;
+        }
+      })();
+      if (answerToValidate?.text.trim()) {
+        answerValidationBusy.current = true;
+        const result = await validateAnswerRelevance({
+          kind: answerToValidate.kind,
+          seed: data.problem.slice(0, 1200),
+          question: answerToValidate.question.slice(0, 600),
+          text: answerToValidate.text.slice(0, 1500),
+        });
+        answerValidationBusy.current = false;
+        if (!result.valid) {
+          setError(result.message);
+          return;
+        }
+      }
+      if (getFormLockState().locked) return;
       const guidedReady = await guidedAnswerRef.current?.review();
       if (guidedReady === false) return;
       mentorApproved = guidedReady === true;
@@ -985,6 +1134,7 @@ export default function StructuredRegistrationForm({
       setError("برای ثبت نهایی، مرور پاسخ‌ها را تأیید کنید.");
       return;
     }
+    if (getFormLockState().locked) return;
 
     setError("");
     if (currentStep === "review") {
@@ -1232,6 +1382,14 @@ export default function StructuredRegistrationForm({
             aria-valuenow={progress}
           ><span style={{ width: `${progress}%` }} /></div>
 
+          {mentorDisabled && (
+            <div className="mentor-checking" role="status">
+              ارتباط با منتور برقرار نشد؛ پرسش‌های تکمیلی غیرفعال‌اند و می‌توانید فرم ثابت را ادامه دهید.
+              <button type="button" className="text-button" onClick={resetMentorApiConnection}>
+                تلاش دوباره برای اتصال
+              </button>
+            </div>
+          )}
           {currentStep === "intro" && (
             <div className="structured-step-content">
               <div className="structured-time"><Clock3 size={17} aria-hidden="true" /> زمان تقریبی: ۵ تا ۷ دقیقه</div>

@@ -9,8 +9,14 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { ArrowRight, LoaderCircle } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { formatNumber, toPersianDigits } from "@/lib/locale";
+import {
+  isMentorApiDisabled,
+  resetMentorApiConnection,
+  requestMentorApi,
+  useMentorApiDisabled,
+} from "@/lib/mentor-api";
 import { SpeechEnabledTextarea } from "./speech-input-control";
 
 type MentorMessage = { role: "user" | "assistant"; content: string };
@@ -61,8 +67,10 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
     const [batchAnswers, setBatchAnswers] = useState<string[]>([]);
     const [speechBusy, setSpeechBusy] = useState(false);
     const [error, setError] = useState("");
+    const [guideError, setGuideError] = useState("");
     const [guidePreview, setGuidePreview] = useState<MentorGuidePreview | null>(null);
     const [guideLoading, setGuideLoading] = useState(false);
+    const mentorDisabled = useMentorApiDisabled();
     const guideRequestKey = useRef("");
     const guideContext = useRef(context);
     guideContext.current = context;
@@ -70,57 +78,66 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
     const requestMentor = useCallback(async (messages: MentorMessage[], questionCount: number) => {
       setStatus("checking");
       setError("");
-      try {
-        const response = await fetch("/api/mentor/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ purpose: "form-guidance", questionCount, messages, ideas: [] }),
-        });
-        const payload: unknown = await response.json();
-        if (
-          !response.ok ||
-          !payload ||
-          typeof payload !== "object" ||
-          !("reply" in payload) ||
-          typeof payload.reply !== "string" ||
-          !("status" in payload) ||
-          (payload.status !== "needs-more" && payload.status !== "sufficient") ||
-          !("questions" in payload) ||
-          !Array.isArray(payload.questions) ||
-          payload.questions.some((item) =>
-            !item || typeof item !== "object" ||
-            !("question" in item) || typeof item.question !== "string" ||
-            !("explanation" in item) || typeof item.explanation !== "string",
+      const requestResult = await requestMentorApi(
+        { purpose: "form-guidance", questionCount, messages, ideas: [] },
+        (payload): FormReviewResponse | null => {
+          if (
+            !payload ||
+            typeof payload !== "object" ||
+            !("reply" in payload) ||
+            typeof payload.reply !== "string" ||
+            !("status" in payload) ||
+            (payload.status !== "needs-more" && payload.status !== "sufficient") ||
+            !("questions" in payload) ||
+            !Array.isArray(payload.questions) ||
+            payload.questions.some((item) =>
+              !item || typeof item !== "object" ||
+              !("question" in item) || typeof item.question !== "string" ||
+              !("explanation" in item) || typeof item.explanation !== "string",
+            )
           )
-        ) {
-          const message = payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
-            ? payload.error
-            : "پاسخ منتور دریافت نشد؛ دوباره تلاش کنید.";
-          throw new Error(message);
-        }
-        const result = payload as FormReviewResponse;
+            return null;
+          return payload as FormReviewResponse;
+        },
+      );
+      if (requestResult.status === "success") {
+        const result = requestResult.data;
+        setGuideError("");
         setMentorReply(result.reply);
         setQuestions(result.questions);
         setQuestionIndex(0);
         setFollowupAnswer("");
         setStatus(result.status === "sufficient" ? "accepted" : "needs-more");
         return result;
-      } catch (requestError) {
-        setStatus(messages.length > 1 ? "needs-more" : "error");
-        setError(requestError instanceof Error ? requestError.message : "ارتباط با منتور برقرار نشد.");
+      }
+      if (requestResult.status === "disabled") {
+        setStatus("accepted");
+        setMentorReply(requestResult.message);
+        setQuestions([]);
+        setQuestionIndex(0);
+        setFollowupAnswer("");
+        setBatchAnswers([]);
         return null;
       }
+      if (requestResult.status === "retry") {
+        setStatus(messages.length > 1 ? "needs-more" : "error");
+        setError(requestResult.message);
+      } else {
+        setStatus("idle");
+      }
+      return null;
     }, []);
 
     useEffect(() => {
-      const requestKey = `${id}\u0000${question}\u0000${guide}`;
+      const requestKey = `${id}\u0000${question}\u0000${guide}\u0000${mentorDisabled}`;
       if (guideRequestKey.current === requestKey) return;
       guideRequestKey.current = requestKey;
 
       const previousAnswers = guideContext.current.trim();
-      if (!previousAnswers) {
+      if (!previousAnswers || mentorDisabled) {
         setGuidePreview({ reflection: "", guidance: guide });
         setGuideLoading(false);
+        if (mentorDisabled) setGuideError("");
         return;
       }
 
@@ -128,38 +145,37 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
       const controller = new AbortController();
       setGuidePreview(null);
       setGuideLoading(true);
+      setGuideError("");
 
       void (async () => {
-        try {
-          const response = await fetch("/api/mentor/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: controller.signal,
-            body: JSON.stringify({
+        const result = await requestMentorApi(
+          {
               purpose: "form-guidance-preview",
               messages: [{
                 role: "user",
                 content: JSON.stringify({ question, guide, previousAnswers }),
               }],
               ideas: [],
-            }),
-          });
-          const payload: unknown = await response.json();
-          if (
-            !response.ok ||
-            !payload ||
-            typeof payload !== "object" ||
-            !("reflection" in payload) ||
-            typeof payload.reflection !== "string" ||
-            !("guidance" in payload) ||
-            typeof payload.guidance !== "string"
-          )
-            throw new Error("Invalid form guide response");
-          if (active) setGuidePreview({ reflection: payload.reflection, guidance: payload.guidance });
-        } catch {
-          if (active) setGuidePreview(null);
-        } finally {
-          if (active) setGuideLoading(false);
+          },
+          (payload): MentorGuidePreview | null => {
+            if (
+              !payload ||
+              typeof payload !== "object" ||
+              !("reflection" in payload) ||
+              typeof payload.reflection !== "string" ||
+              !("guidance" in payload) ||
+              typeof payload.guidance !== "string"
+            )
+              return null;
+            return { reflection: payload.reflection, guidance: payload.guidance };
+          },
+          controller.signal,
+        );
+        if (active) {
+          if (result.status === "success") setGuidePreview(result.data);
+          else if (result.status === "retry" || result.status === "disabled")
+            setGuideError(result.message);
+          setGuideLoading(false);
         }
       })();
 
@@ -168,10 +184,19 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
         controller.abort();
         if (guideRequestKey.current === requestKey) guideRequestKey.current = "";
       };
-    }, [guide, id, question]);
+    }, [guide, id, question, mentorDisabled]);
 
     const review = useCallback(async () => {
       if (status === "accepted") return true;
+      if (mentorDisabled) {
+        setStatus("accepted");
+        setMentorReply("پس از دو بار تلاش، ارتباط با منتور برقرار نشد؛ پرسش‌های تکمیلی غیرفعال شدند. فرم ثابت را ادامه دهید.");
+        setQuestions([]);
+        setQuestionIndex(0);
+        setFollowupAnswer("");
+        setBatchAnswers([]);
+        return true;
+      }
       if (status === "needs-more" || status === "checking" || speechBusy) return false;
       const request = {
         question,
@@ -181,19 +206,19 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
       };
       const requestMessage = { role: "user" as const, content: JSON.stringify(request) };
       const result = await requestMentor([requestMessage], 1 + Math.floor(Math.random() * 3));
-      if (!result) return false;
+      if (!result) return isMentorApiDisabled();
       if (result.status === "needs-more") {
         return false;
       }
       return true;
-    }, [context, guide, question, requestMentor, speechBusy, status, value]);
+    }, [context, guide, mentorDisabled, question, requestMentor, speechBusy, status, value]);
 
     useImperativeHandle(ref, () => ({ review }), [review]);
 
     async function submitFollowup(event: FormEvent<HTMLFormElement>) {
       event.preventDefault();
       const trimmedAnswer = followupAnswer.trim();
-      if (!trimmedAnswer || speechBusy || status === "checking") return;
+      if (!trimmedAnswer || speechBusy || status === "checking" || mentorDisabled) return;
       const answers = [...batchAnswers, trimmedAnswer];
       if (questionIndex < questions.length - 1) {
         setBatchAnswers(answers);
@@ -239,6 +264,15 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
             <span className="mentor-guidance-heading">در این سؤال توضیح بده</span>
             <p>{toPersianDigits(guidePreview?.guidance ?? guide)}</p>
           </div>
+          {guideError && <p className="inline-error" role="alert">{guideError}</p>}
+          {mentorDisabled && (
+            <div className="mentor-checking" role="status">
+              پرسش‌های تکمیلی منتور غیرفعال است؛ فرم ثابت را ادامه دهید.
+              <button type="button" className="text-button" onClick={resetMentorApiConnection}>
+                تلاش دوباره برای اتصال
+              </button>
+            </div>
+          )}
         </div>
         <SpeechEnabledTextarea
           id={id}
@@ -256,7 +290,7 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
             <p>{toPersianDigits(mentorReply)}</p>
           </div>
         )}
-        {status === "needs-more" && (
+        {status === "needs-more" && !mentorDisabled && (
           <form className="mentor-followup" onSubmit={(event) => void submitFollowup(event)}>
             {currentQuestion && (
               <div className="mentor-followup-question">
@@ -278,8 +312,8 @@ const MentorGuidedTextarea = forwardRef<MentorGuidedTextareaHandle, Props>(
               maxLength={2000}
               onBusyChange={setSpeechBusy}
             />
-            <button className="subtle-button" type="submit" disabled={!followupAnswer.trim() || speechBusy || status === "checking"}>
-              {status === "checking" ? <LoaderCircle className="mentor-check-spinner" size={16} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
+            <button className="subtle-button" type="submit" disabled={!followupAnswer.trim() || speechBusy}>
+              <ArrowRight size={16} aria-hidden="true" />
               {questionIndex < questions.length - 1 ? "ثبت پاسخ و ادامه" : "پاسخ به منتور"}
             </button>
           </form>
