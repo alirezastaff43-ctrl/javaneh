@@ -323,3 +323,12 @@ model AuditEvent {
   @@index([subjectUserId, occurredAt])
   @@index([entityType, entityId])
 }
+
+model ApiRateLimitBucket {
+  id              String   @id @db.VarChar(64)
+  windowStartedAt DateTime @db.Timestamptz(3)
+  requestCount    Int
+  expiresAt       DateTime @db.Timestamptz(3)
+
+  @@index([expiresAt])
+}

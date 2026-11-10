@@ -1,5 +1,6 @@
 import { Prisma, UserRoleCode } from "@prisma/client";
 import { z } from "zod";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import {
   adminForbiddenResponse,
   adminUnauthorizedResponse,
@@ -51,6 +52,8 @@ export async function PATCH(
   request: Request,
   context: { params: Promise<{ userId: string }> },
 ) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   if (!hasSameOrigin(request))
     return Response.json(
       { code: "invalid_origin", error: "درخواست قابل تأیید نیست." },

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import {
   clearSessionCookie,
   getAuthenticatedUser,
@@ -11,6 +12,8 @@ import { prisma } from "@/lib/prisma";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   if (!hasSameOrigin(request))
     return NextResponse.json({ error: "درخواست قابل تأیید نیست." }, { status: 403 });
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
+import { getAuthenticatedUser, hasSameOrigin, unauthorizedResponse } from "@/lib/auth";
 import { getApprovedProviderUrl } from "@/lib/internal-provider-url";
 
 const DEFAULT_BINAVIRA_API = "https://binavira.ir/api";
@@ -175,6 +176,10 @@ async function transcribeLongAudio(
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
+  if (!hasSameOrigin(request))
+    return failure("invalid_origin", "درخواست قابل تأیید نیست.", 403);
   if (!(await getAuthenticatedUser(request))) return unauthorizedResponse();
 
   const token = process.env.BINAVIRA_API_TOKEN?.trim();

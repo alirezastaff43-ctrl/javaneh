@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
+import { getAuthenticatedUser, hasSameOrigin, unauthorizedResponse } from "@/lib/auth";
 import { isPersianText } from "@/lib/locale";
 import { redactPersonalData } from "@/lib/privacy";
 import { getProviderConfiguration } from "@/lib/provider";
@@ -270,6 +271,13 @@ function responseMessage(
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
+  if (!hasSameOrigin(request))
+    return NextResponse.json(
+      { code: "invalid_origin", error: "درخواست قابل تأیید نیست." },
+      { status: 403 },
+    );
   const user = await getAuthenticatedUser(request);
   if (!user) return unauthorizedResponse();
 

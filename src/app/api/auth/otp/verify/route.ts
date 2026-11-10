@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import {
   createSessionToken,
   hasSameOrigin,
@@ -26,6 +27,8 @@ function failure(code: string, error: string, status: number) {
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   if (!hasSameOrigin(request))
     return failure("invalid_origin", "درخواست قابل تأیید نیست.", 403);
 
@@ -159,7 +162,10 @@ export async function POST(request: Request) {
         "برای این شماره حسابی وجود دارد؛ از مسیر ورود استفاده کنید.",
         409,
       );
-    console.error("[auth] OTP verification failed", error);
+    console.error(
+      "[auth] OTP verification failed",
+      error instanceof Error ? error.name : "unknown",
+    );
     return failure("authentication_unavailable", "ورود موقتاً ممکن نیست.", 503);
   }
 }

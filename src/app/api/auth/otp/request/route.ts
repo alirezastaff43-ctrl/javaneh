@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import { hasSameOrigin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
@@ -40,6 +41,8 @@ function requestIp(request: Request): string {
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   if (!hasSameOrigin(request))
     return failure("invalid_origin", "درخواست قابل تأیید نیست.", 403);
 

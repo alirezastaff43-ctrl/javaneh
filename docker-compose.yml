@@ -17,6 +17,7 @@ services:
       - backend
 
   migrate:
+    image: ${MIGRATE_IMAGE:-javaneh-migrate:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -34,6 +35,7 @@ services:
       - backend
 
   app:
+    image: ${APP_IMAGE:-javaneh:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -55,6 +57,7 @@ services:
       BINAVIRA_FILES_BASE_URL: ${BINAVIRA_FILES_BASE_URL:-}
       BINAVIRA_API_TOKEN: ${BINAVIRA_API_TOKEN:-}
       AUTH_OTP_SECRET: ${AUTH_OTP_SECRET:?Set AUTH_OTP_SECRET in .env}
+      API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-120}
       SMS_PROVIDER_URL: ${SMS_PROVIDER_URL:-}
       SMS_PROVIDER_API_KEY: ${SMS_PROVIDER_API_KEY:-}
     ports:
@@ -82,8 +85,10 @@ services:
         max-file: "5"
     networks:
       - backend
+      - provider-egress
 
   deadline-worker:
+    image: ${APP_IMAGE:-javaneh:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -116,3 +121,5 @@ volumes:
 
 networks:
   backend:
+    internal: true
+  provider-egress:

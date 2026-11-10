@@ -10,6 +10,8 @@
     "db:validate": "prisma validate",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:deadlines": "node scripts/deadline-worker.mjs",
+    "db:backup": "bash scripts/backup-database.sh",
+    "db:restore:test": "bash scripts/restore-database-test.sh",
     "admin:bootstrap": "node scripts/bootstrap-admin.mjs",
     "prebuild": "prisma generate",
     "lint": "eslint .",

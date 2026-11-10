@@ -3,6 +3,7 @@ import { DEVELOPMENT_AXES, INTAKE_AXES } from "@/lib/interviewer";
 import { GET, POST } from "./route";
 
 vi.mock("@/lib/auth", () => ({
+  hasSameOrigin: vi.fn().mockReturnValue(true),
   getAuthenticatedUser: vi.fn().mockResolvedValue({
     id: "00000000-0000-4000-8000-000000000001",
     mobile: "+989121234567",
@@ -134,7 +135,7 @@ async function post(value: unknown) {
   return POST(
     new Request("http://localhost/api/mentor", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Origin: "http://localhost" },
       body: JSON.stringify(value),
     }),
   );
@@ -613,6 +614,7 @@ describe("adaptive interview route", () => {
     const badBody = await POST(
       new Request("http://localhost/api/mentor", {
         method: "POST",
+        headers: { Origin: "http://localhost" },
         body: "{",
       }),
     );
@@ -751,7 +753,8 @@ describe("adaptive interview route", () => {
     expect(result.error).not.toContain("provider detail");
     expect(JSON.stringify(result)).not.toContain("test-openrouter-key");
     expect(error).toHaveBeenCalledWith(
-      expect.stringContaining('"status":429'),
+      "[interview] provider request rejected",
+      expect.objectContaining({ status: 429 }),
     );
     expect(JSON.stringify(error.mock.calls)).not.toContain("test-openrouter-key");
   });
@@ -819,7 +822,7 @@ describe("adaptive interview route", () => {
           : "provider_request_rejected",
       );
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify(error.mock.calls)).toContain("provider detail");
+      expect(JSON.stringify(error.mock.calls)).not.toContain("provider detail");
       expect(JSON.stringify(error.mock.calls)).not.toContain("test-openrouter-key");
     },
   );

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
 vi.mock("@/lib/auth", () => ({
+  hasSameOrigin: vi.fn().mockReturnValue(true),
   getAuthenticatedUser: vi.fn().mockResolvedValue({
     id: "00000000-0000-4000-8000-000000000001",
     mobile: "+989121234567",
@@ -20,7 +21,7 @@ function post(overrides: Record<string, unknown> = {}) {
   return POST(
     new Request("http://localhost/api/mentor/moderate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Origin: "http://localhost" },
       body: JSON.stringify({
         kind: "seed",
         seed: "تاب‌آوری محله در بحران",

@@ -8,6 +8,7 @@ This document defines the Stage 1 storage contract. Retention durations below ar
 | --- | --- | --- |
 | `User` | Verified mobile number, optional display name, status, timestamps | Account deletion cascades to user-owned application records. |
 | `OtpChallenge` | Mobile, signup/login purpose, HMAC code digest, request-IP digest, attempts, expiry | Expired/old OTP challenges are removed by the worker after 24 hours. Never log the submitted code or request body. |
+| `ApiRateLimitBucket` | Short-lived HMAC of the trusted source-IP address and request count; contains no raw IP | Buckets expire after two minutes and are removed by API traffic. Do not retain or export these operational identifiers. |
 | `AuthSession` | Hashed opaque session token, user, expiry and last use | Revoke on logout/account suspension; expired sessions are removed by the worker. |
 | `FormValidationLock` | Per-user invalid-answer counter and temporary lock deadline | Cascades with the user; state is enforced and retained on the server rather than in browser storage. |
 | `UserRole` | Roles assigned to an account and optional assigning account | Cascades with the account; role changes must be audited. |

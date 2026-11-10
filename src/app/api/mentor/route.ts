@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
+import { getAuthenticatedUser, hasSameOrigin, unauthorizedResponse } from "@/lib/auth";
 import { isPersianText } from "@/lib/locale";
 import { redactPersonalData } from "@/lib/privacy";
 import { getProviderConfiguration } from "@/lib/provider";
@@ -151,7 +152,9 @@ async function logProviderFailure(
         undefined,
     },
   };
-  console.error(`[interview] provider response ${JSON.stringify(diagnostic)}`);
+  console.error("[interview] provider request rejected", {
+    status: diagnostic.status,
+  });
 }
 
 function providerFailure(
@@ -359,6 +362,8 @@ const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر ه�
 برای پرسش بعدی، nextSection باید یکی از محورهای واجد شرایط و پوشش‌نیافته باشد. nextQuestion باید دست‌کم یکی از عبارت‌های کانونی همان محور را داشته باشد، فارسی روشن، مرتبط، غیرخالی، حداکثر ۶۰۰ نویسه و دقیقاً یک پرسش باشد. پاسخ را تکرار نکن و چند درخواست را در یک پرسش نیاور. questionContext در صورت کمک، کوتاه و مرتبط باشد. اگر مرحله کامل است، nextSection، nextQuestion و questionContext را null قرار بده؛ در غیر این صورت stageComplete برابر false باشد. فقط یک JSON معتبر با همین کلیدها برگردان: mentorMessage، answerSufficient، stageComplete، coveredSections، nextSection، nextQuestion و questionContext.`;
 
 export async function GET(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   if (!(await getAuthenticatedUser(request))) return unauthorizedResponse();
   const providerResult = getProviderConfiguration();
   return NextResponse.json({
@@ -371,6 +376,13 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
+  if (!hasSameOrigin(request))
+    return NextResponse.json(
+      { code: "invalid_origin", error: "درخواست قابل تأیید نیست." },
+      { status: 403 },
+    );
   const user = await getAuthenticatedUser(request);
   if (!user) return unauthorizedResponse();
 

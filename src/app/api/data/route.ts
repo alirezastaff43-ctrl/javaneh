@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import {
   getAuthenticatedUser,
   hasSameOrigin,
@@ -43,6 +44,8 @@ async function readBoundedBody(request: Request): Promise<string | null> {
 }
 
 export async function GET(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   const user = await getAuthenticatedUser(request);
   if (!user) return unauthorizedResponse();
   try {
@@ -62,6 +65,8 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   if (!hasSameOrigin(request))
     return NextResponse.json({ error: "درخواست قابل تأیید نیست." }, { status: 403 });
   const user = await getAuthenticatedUser(request);

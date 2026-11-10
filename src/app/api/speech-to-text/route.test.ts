@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
 vi.mock("@/lib/auth", () => ({
+  hasSameOrigin: vi.fn().mockReturnValue(true),
   getAuthenticatedUser: vi.fn().mockResolvedValue({
     id: "00000000-0000-4000-8000-000000000001",
     mobile: "+989121234567",
@@ -10,11 +11,16 @@ vi.mock("@/lib/auth", () => ({
   unauthorizedResponse: () => Response.json({ error: "unauthorized" }, { status: 401 }),
 }));
 
+vi.mock("@/lib/api-rate-limit", () => ({
+  enforceApiRateLimit: vi.fn().mockResolvedValue(null),
+}));
+
 function audioRequest() {
   const body = new FormData();
   body.append("audio", new Blob(["audio"], { type: "audio/webm" }), "voice.webm");
   return new Request("http://localhost/api/speech-to-text", {
     method: "POST",
+    headers: { Origin: "http://localhost" },
     body,
   });
 }
@@ -103,6 +109,7 @@ describe("speech-to-text route", () => {
     const response = await POST(
       new Request("http://localhost/api/speech-to-text", {
         method: "POST",
+        headers: { Origin: "http://localhost" },
         body,
       }),
     );

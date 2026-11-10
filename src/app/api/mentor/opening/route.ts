@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
+import { getAuthenticatedUser, hasSameOrigin, unauthorizedResponse } from "@/lib/auth";
 import { redactPersonalData } from "@/lib/privacy";
 import {
   createDemoOpeningQuestion,
@@ -85,6 +86,10 @@ async function readResponseBody(response: Response): Promise<string | null> {
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
+  if (!hasSameOrigin(request))
+    return failure("invalid_origin", "درخواست قابل تأیید نیست.", 403);
   if (!(await getAuthenticatedUser(request))) return unauthorizedResponse();
 
   let seed: string;

@@ -3,6 +3,7 @@ import { getAuthenticatedUser } from "@/lib/auth";
 import { POST } from "./route";
 
 vi.mock("@/lib/auth", () => ({
+  hasSameOrigin: vi.fn().mockReturnValue(true),
   getAuthenticatedUser: vi.fn().mockResolvedValue({
     id: "00000000-0000-4000-8000-000000000001",
     mobile: "+989121234567",
@@ -55,7 +56,7 @@ function chatRequest(body: unknown) {
   return POST(
     new Request("http://localhost/api/mentor/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Origin: "http://localhost" },
       body: JSON.stringify(body),
     }),
   );

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import {
   getAuthenticatedUser,
   hasSameOrigin,
@@ -22,6 +23,8 @@ function lockPayload(lockedUntil: Date | null, now = Date.now()) {
 }
 
 export async function GET(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   const user = await getAuthenticatedUser(request);
   if (!user) return unauthorizedResponse();
   const now = new Date();
@@ -40,6 +43,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   if (!hasSameOrigin(request))
     return NextResponse.json({ error: "درخواست قابل تأیید نیست." }, { status: 403 });
   const user = await getAuthenticatedUser(request);

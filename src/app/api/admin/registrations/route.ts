@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import {
   adminForbiddenResponse,
   adminUnauthorizedResponse,
@@ -26,6 +27,8 @@ function noStore(payload: unknown, status = 200) {
 }
 
 export async function GET(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
   const actor = await getAdminActor(request);
   if (!actor) return adminUnauthorizedResponse();
   if (!hasPermission(actor, "registrations.view")) return adminForbiddenResponse();

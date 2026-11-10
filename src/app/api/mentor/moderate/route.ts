@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+import { enforceApiRateLimit } from "@/lib/api-rate-limit";
+import { getAuthenticatedUser, hasSameOrigin, unauthorizedResponse } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { classifyDemoText, type ModerationInput } from "@/lib/moderation";
 import { redactPersonalData } from "@/lib/privacy";
@@ -26,6 +27,10 @@ function failure(code: string, error: string, status: number) {
 }
 
 export async function POST(request: Request) {
+  const limited = await enforceApiRateLimit(request);
+  if (limited) return limited;
+  if (!hasSameOrigin(request))
+    return failure("invalid_origin", "درخواست قابل تأیید نیست.", 403);
   const user = await getAuthenticatedUser(request);
   if (!user) return unauthorizedResponse();
   const lock = await prisma.formValidationLock.findUnique({

@@ -4,13 +4,19 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: Deploy the current main commit to production after environment approval
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -45,3 +51,177 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+  publish-staging:
+    name: Publish image and deploy staging
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.INTERNAL_REGISTRY != '' && vars.INTERNAL_IMAGE_NAME != ''
+    concurrency:
+      group: javaneh-staging-deploy
+      cancel-in-progress: false
+    runs-on: [self-hosted, linux, x64, internal-deploy]
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment settings
+        env:
+          INTERNAL_REGISTRY: ${{ vars.INTERNAL_REGISTRY }}
+          INTERNAL_IMAGE_NAME: ${{ vars.INTERNAL_IMAGE_NAME }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          STAGING_DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH }}
+        run: |
+          set -eu
+          if [ -z "$INTERNAL_REGISTRY" ] || [ -z "$INTERNAL_IMAGE_NAME" ] || [ -z "$REGISTRY_USERNAME" ] || [ -z "$REGISTRY_PASSWORD" ] || [ -z "$STAGING_HOST" ] || [ -z "$STAGING_SSH_USER" ] || [ -z "$STAGING_SSH_PRIVATE_KEY" ] || [ -z "$STAGING_SSH_KNOWN_HOSTS" ] || [ -z "$STAGING_DEPLOY_PATH" ]; then
+            echo "One or more required staging deployment settings are missing." >&2
+            exit 1
+          fi
+          case "$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME" in
+            *[!A-Za-z0-9._:/-]*|*..*|/*|*/|*//*)
+              echo "Invalid internal image path" >&2
+              exit 1
+              ;;
+          esac
+          case "$REGISTRY_USERNAME" in
+            *[!A-Za-z0-9._-]*)
+              echo "Invalid registry username" >&2
+              exit 1
+              ;;
+          esac
+          case "$STAGING_DEPLOY_PATH" in
+            /*) ;;
+            *) echo "STAGING_DEPLOY_PATH must be an absolute path" >&2; exit 1 ;;
+          esac
+          case "$STAGING_DEPLOY_PATH$STAGING_HOST$STAGING_SSH_USER" in
+            *[!A-Za-z0-9._/-]*)
+              echo "Invalid staging SSH host, user, or deploy path" >&2
+              exit 1
+              ;;
+          esac
+      - name: Build and publish immutable images
+        env:
+          INTERNAL_REGISTRY: ${{ vars.INTERNAL_REGISTRY }}
+          INTERNAL_IMAGE_NAME: ${{ vars.INTERNAL_IMAGE_NAME }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          NPMRC: ${{ secrets.NPMRC }}
+          NPM_REGISTRY: ${{ vars.NPM_REGISTRY }}
+        run: |
+          set -eu
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$INTERNAL_REGISTRY" --username "$REGISTRY_USERNAME" --password-stdin
+          npmrc_file="$(mktemp)"
+          trap 'rm -f "$npmrc_file"; docker logout "$INTERNAL_REGISTRY" >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$NPMRC" > "$npmrc_file"
+          chmod 600 "$npmrc_file"
+          app_image="$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME:$GITHUB_SHA"
+          migrate_image="$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME-migrate:$GITHUB_SHA"
+          docker buildx build --secret "id=npmrc,src=$npmrc_file" --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmjs.org}" --target runner --tag "$app_image" --push .
+          docker buildx build --secret "id=npmrc,src=$npmrc_file" --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmjs.org}" --target db-migrate --tag "$migrate_image" --push .
+      - name: Deploy staging
+        env:
+          INTERNAL_REGISTRY: ${{ vars.INTERNAL_REGISTRY }}
+          INTERNAL_IMAGE_NAME: ${{ vars.INTERNAL_IMAGE_NAME }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          STAGING_DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH }}
+        run: |
+          set -eu
+          key_file="$(mktemp)"
+          known_hosts_file="$(mktemp)"
+          trap 'rm -f "$key_file" "$known_hosts_file"' EXIT
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > "$known_hosts_file"
+          chmod 600 "$key_file" "$known_hosts_file"
+          app_image="$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME:$GITHUB_SHA"
+          migrate_image="$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME-migrate:$GITHUB_SHA"
+          remote_command="set -eu; docker_config=\$(mktemp -d); export DOCKER_CONFIG=\$docker_config; trap 'docker logout \"$INTERNAL_REGISTRY\" >/dev/null 2>&1 || true; rm -f \"\$docker_config/config.json\"; rmdir \"\$docker_config\" 2>/dev/null || true' EXIT; docker login \"$INTERNAL_REGISTRY\" --username \"$REGISTRY_USERNAME\" --password-stdin; cd '$STAGING_DEPLOY_PATH' && APP_IMAGE='$app_image' MIGRATE_IMAGE='$migrate_image' docker compose pull migrate app deadline-worker && APP_IMAGE='$app_image' MIGRATE_IMAGE='$migrate_image' docker compose up -d --no-build migrate app deadline-worker && APP_IMAGE='$app_image' MIGRATE_IMAGE='$migrate_image' docker compose up -d --no-build --wait --wait-timeout 120 app"
+          printf '%s' "$REGISTRY_PASSWORD" | ssh -i "$key_file" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts_file" "$STAGING_SSH_USER@$STAGING_HOST" "$remote_command"
+
+  deploy-production:
+    name: Deploy approved production image
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_production && github.ref == 'refs/heads/main' && vars.INTERNAL_REGISTRY != '' && vars.INTERNAL_IMAGE_NAME != ''
+    concurrency:
+      group: javaneh-production-deploy
+      cancel-in-progress: false
+    runs-on: [self-hosted, linux, x64, internal-deploy]
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Validate production image and deployment settings
+        env:
+          INTERNAL_REGISTRY: ${{ vars.INTERNAL_REGISTRY }}
+          INTERNAL_IMAGE_NAME: ${{ vars.INTERNAL_IMAGE_NAME }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
+          PRODUCTION_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          PRODUCTION_SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+          PRODUCTION_DEPLOY_PATH: ${{ vars.PRODUCTION_DEPLOY_PATH }}
+        run: |
+          set -eu
+          trap 'docker logout "$INTERNAL_REGISTRY" >/dev/null 2>&1 || true' EXIT
+          if [ -z "$INTERNAL_REGISTRY" ] || [ -z "$INTERNAL_IMAGE_NAME" ] || [ -z "$REGISTRY_USERNAME" ] || [ -z "$REGISTRY_PASSWORD" ] || [ -z "$PRODUCTION_HOST" ] || [ -z "$PRODUCTION_SSH_USER" ] || [ -z "$PRODUCTION_SSH_PRIVATE_KEY" ] || [ -z "$PRODUCTION_SSH_KNOWN_HOSTS" ] || [ -z "$PRODUCTION_DEPLOY_PATH" ]; then
+            echo "One or more required production deployment settings are missing." >&2
+            exit 1
+          fi
+          case "$PRODUCTION_DEPLOY_PATH" in
+            /*) ;;
+            *) echo "PRODUCTION_DEPLOY_PATH must be an absolute path" >&2; exit 1 ;;
+          esac
+          case "$PRODUCTION_DEPLOY_PATH$PRODUCTION_HOST$PRODUCTION_SSH_USER" in
+            *[!A-Za-z0-9._/-]*)
+              echo "Invalid production SSH host, user, or deploy path" >&2
+              exit 1
+              ;;
+          esac
+          case "$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME" in
+            *[!A-Za-z0-9._:/-]*|*..*|/*|*/|*//*)
+              echo "Invalid internal image path" >&2
+              exit 1
+              ;;
+          esac
+          case "$REGISTRY_USERNAME" in
+            *[!A-Za-z0-9._-]*)
+              echo "Invalid registry username" >&2
+              exit 1
+              ;;
+          esac
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$INTERNAL_REGISTRY" --username "$REGISTRY_USERNAME" --password-stdin
+          docker manifest inspect "$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME:$GITHUB_SHA" >/dev/null
+          docker manifest inspect "$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME-migrate:$GITHUB_SHA" >/dev/null
+      - name: Deploy production
+        env:
+          INTERNAL_REGISTRY: ${{ vars.INTERNAL_REGISTRY }}
+          INTERNAL_IMAGE_NAME: ${{ vars.INTERNAL_IMAGE_NAME }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
+          PRODUCTION_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          PRODUCTION_SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+          PRODUCTION_DEPLOY_PATH: ${{ vars.PRODUCTION_DEPLOY_PATH }}
+        run: |
+          set -eu
+          key_file="$(mktemp)"
+          known_hosts_file="$(mktemp)"
+          trap 'rm -f "$key_file" "$known_hosts_file"' EXIT
+          printf '%s\n' "$PRODUCTION_SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$PRODUCTION_SSH_KNOWN_HOSTS" > "$known_hosts_file"
+          chmod 600 "$key_file" "$known_hosts_file"
+          app_image="$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME:$GITHUB_SHA"
+          migrate_image="$INTERNAL_REGISTRY/$INTERNAL_IMAGE_NAME-migrate:$GITHUB_SHA"
+          remote_command="set -eu; docker_config=\$(mktemp -d); export DOCKER_CONFIG=\$docker_config; trap 'docker logout \"$INTERNAL_REGISTRY\" >/dev/null 2>&1 || true; rm -f \"\$docker_config/config.json\"; rmdir \"\$docker_config\" 2>/dev/null || true' EXIT; docker login \"$INTERNAL_REGISTRY\" --username \"$REGISTRY_USERNAME\" --password-stdin; cd '$PRODUCTION_DEPLOY_PATH' && APP_IMAGE='$app_image' MIGRATE_IMAGE='$migrate_image' docker compose pull migrate app deadline-worker && APP_IMAGE='$app_image' MIGRATE_IMAGE='$migrate_image' docker compose up -d --no-build migrate app deadline-worker && APP_IMAGE='$app_image' MIGRATE_IMAGE='$migrate_image' docker compose up -d --no-build --wait --wait-timeout 120 app"
+          printf '%s' "$REGISTRY_PASSWORD" | ssh -i "$key_file" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts_file" "$PRODUCTION_SSH_USER@$PRODUCTION_HOST" "$remote_command"
