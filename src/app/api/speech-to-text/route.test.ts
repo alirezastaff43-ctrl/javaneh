@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
+vi.mock("@/lib/auth", () => ({
+  getAuthenticatedUser: vi.fn().mockResolvedValue({
+    id: "00000000-0000-4000-8000-000000000001",
+    mobile: "+989121234567",
+    fullName: null,
+  }),
+  unauthorizedResponse: () => Response.json({ error: "unauthorized" }, { status: 401 }),
+}));
+
 function audioRequest() {
   const body = new FormData();
   body.append("audio", new Blob(["audio"], { type: "audio/webm" }), "voice.webm");
@@ -62,6 +71,21 @@ describe("speech-to-text route", () => {
 
   it("requires a server-side token without calling the provider", async () => {
     vi.stubEnv("BINAVIRA_API_TOKEN", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(audioRequest());
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "speech_not_configured" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed in production when internal service hosts are not approved", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("INTERNAL_PROVIDER_ALLOWED_HOSTS", "");
+    vi.stubEnv("BINAVIRA_API_BASE_URL", "https://speech.internal.example/api");
+    vi.stubEnv("BINAVIRA_FILES_BASE_URL", "https://speech.internal.example/files");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { classifyDemoText, type ModerationInput } from "@/lib/moderation";
 import { redactPersonalData } from "@/lib/privacy";
 import { getProviderConfiguration } from "@/lib/provider";
@@ -24,6 +26,19 @@ function failure(code: string, error: string, status: number) {
 }
 
 export async function POST(request: Request) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) return unauthorizedResponse();
+  const lock = await prisma.formValidationLock.findUnique({
+    where: { userId: user.id },
+    select: { lockedUntil: true },
+  });
+  if (lock?.lockedUntil && lock.lockedUntil > new Date())
+    return failure(
+      "form_locked",
+      "به‌دلیل چند پاسخ نامعتبر، تکمیل فرم تا ۱۲ ساعت محدود شده است.",
+      423,
+    );
+
   let input: z.infer<typeof requestSchema>;
   try {
     const body = await request.json();
@@ -63,6 +78,7 @@ export async function POST(request: Request) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",

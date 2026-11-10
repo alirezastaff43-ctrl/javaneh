@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
 import { redactPersonalData } from "@/lib/privacy";
 import {
   createDemoOpeningQuestion,
@@ -84,6 +85,8 @@ async function readResponseBody(response: Response): Promise<string | null> {
 }
 
 export async function POST(request: Request) {
+  if (!(await getAuthenticatedUser(request))) return unauthorizedResponse();
+
   let seed: string;
   try {
     const body = await readRequestBody(request);
@@ -127,6 +130,7 @@ export async function POST(request: Request) {
     try {
       response = await fetch(endpoint, {
         method: "POST",
+        redirect: "error",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",

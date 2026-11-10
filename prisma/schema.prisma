@@ -1,0 +1,325 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  active
+  suspended
+}
+
+enum UserRoleCode {
+  platform_owner
+  registration_manager
+  support
+  analyst
+  read_only
+}
+
+enum LegacyIdeaStatus {
+  initial
+  in_development
+  awaiting_confirmation
+  submitted
+}
+
+enum LegacyIdeaStage {
+  initial
+  development
+  review
+}
+
+enum StructuredRegistrationStatus {
+  draft
+  submitted
+}
+
+enum WorkbookFlow {
+  C
+  P
+  S
+  E
+}
+
+enum WorkbookStatus {
+  locked
+  available
+  draft
+  submitted
+}
+
+enum MentorMessageRole {
+  user
+  assistant
+}
+
+enum OtpPurpose {
+  signup
+  login
+}
+
+model User {
+  id                  String                   @id @db.Uuid
+  mobile              String                   @unique @db.VarChar(20)
+  fullName            String?                  @db.VarChar(160)
+  status              UserStatus               @default(active)
+  mobileVerifiedAt    DateTime?                @db.Timestamptz(3)
+  dataVersion         Int                      @default(0)
+  createdAt           DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                 @updatedAt @db.Timestamptz(3)
+  roles               UserRole[]
+  rolesAssigned       UserRole[]               @relation("RoleAssignedBy")
+  ideaSlots           UserIdeaSlot[]
+  legacyIdeas         LegacyIdea[]
+  registrations       StructuredRegistration[]
+  mentorConversations MentorConversation[]
+  sessions            AuthSession[]
+  formValidationLock  FormValidationLock?
+  auditAsActor        AuditEvent[]             @relation("AuditActor")
+  auditAsSubject      AuditEvent[]             @relation("AuditSubject")
+
+  @@index([status, createdAt])
+}
+
+model OtpChallenge {
+  id            String     @id @db.Uuid
+  mobile        String     @db.VarChar(20)
+  purpose       OtpPurpose
+  codeHash      String     @db.VarChar(64)
+  requestIpHash String     @db.VarChar(64)
+  attempts      Int        @default(0)
+  expiresAt     DateTime   @db.Timestamptz(3)
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
+  consumedAt    DateTime?  @db.Timestamptz(3)
+
+  @@index([mobile, purpose, createdAt])
+  @@index([requestIpHash, createdAt])
+  @@index([expiresAt])
+}
+
+model AuthSession {
+  tokenHash  String   @id @db.VarChar(64)
+  userId     String   @db.Uuid
+  expiresAt  DateTime @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  lastUsedAt DateTime @default(now()) @db.Timestamptz(3)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model FormValidationLock {
+  userId          String   @id @db.Uuid
+  invalidAttempts Int      @default(0)
+  windowStartedAt DateTime? @db.Timestamptz(3)
+  lockedUntil     DateTime? @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserRole {
+  userId     String       @db.Uuid
+  role       UserRoleCode
+  assignedBy String?      @db.Uuid
+  assignedAt DateTime     @default(now()) @db.Timestamptz(3)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assigner   User?        @relation("RoleAssignedBy", fields: [assignedBy], references: [id], onDelete: SetNull)
+
+  @@id([userId, role])
+  @@index([role, assignedAt])
+}
+
+model UserIdeaSlot {
+  userId         String                  @db.Uuid
+  slotNumber     Int
+  legacyIdeaId   String?                 @db.Uuid
+  registrationId String?                 @db.Uuid
+  createdAt      DateTime                @default(now()) @db.Timestamptz(3)
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  legacyIdea     LegacyIdea?             @relation(fields: [legacyIdeaId, userId], references: [id, userId], onDelete: Cascade)
+  registration   StructuredRegistration? @relation(fields: [registrationId, userId], references: [id, userId], onDelete: Cascade)
+
+  @@id([userId, slotNumber])
+  @@index([userId, createdAt])
+  @@unique([legacyIdeaId, userId])
+  @@unique([registrationId, userId])
+}
+
+model LegacyIdea {
+  id                     String                @id @db.Uuid
+  userId                 String                @db.Uuid
+  schemaVersion          Int                   @default(1)
+  title                  String                @db.VarChar(80)
+  seed                   String                @db.VarChar(1200)
+  status                 LegacyIdeaStatus      @default(initial)
+  stage                  LegacyIdeaStage       @default(initial)
+  intakeIndex            Int                   @default(0)
+  developmentIndex       Int                   @default(0)
+  invalidResponseCount   Int                   @default(0)
+  intakeSummary          String?
+  draftAnswer            String?               @db.VarChar(1500)
+  mentorNextQuestion     Json?
+  pendingTurn            Json?
+  skippedSections        Json?
+  editingProgress        Json?
+  confirmationDeadlineAt DateTime?             @db.Timestamptz(3)
+  submittedAt            DateTime?             @db.Timestamptz(3)
+  autoSubmitted          Boolean               @default(false)
+  createdAt              DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime              @updatedAt @db.Timestamptz(3)
+  user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slot                   UserIdeaSlot?
+  answers                LegacyIdeaAnswer[]
+  proposalFields         LegacyProposalField[]
+  tokenEntries           LegacyTokenEntry[]
+  mentorConversations    MentorConversation[]
+
+  @@index([userId, updatedAt])
+  @@index([status, confirmationDeadlineAt])
+  @@unique([id, userId])
+}
+
+model LegacyIdeaAnswer {
+  id        String     @id @db.Uuid
+  ideaId    String     @db.Uuid
+  position  Int
+  section   String     @db.VarChar(80)
+  question  String     @db.VarChar(600)
+  answer    String     @db.VarChar(1500)
+  createdAt DateTime   @default(now()) @db.Timestamptz(3)
+  idea      LegacyIdea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+
+  @@unique([ideaId, position])
+  @@index([ideaId, section])
+}
+
+model LegacyProposalField {
+  id       String     @id @db.Uuid
+  ideaId   String     @db.Uuid
+  fieldKey String     @db.VarChar(80)
+  position Int
+  text     String     @db.VarChar(3000)
+  idea     LegacyIdea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+
+  @@unique([ideaId, fieldKey])
+  @@unique([ideaId, position])
+}
+
+model LegacyTokenEntry {
+  id        String     @id @db.Uuid
+  ideaId    String     @db.Uuid
+  reason    String     @db.VarChar(160)
+  amount    Int
+  dedupeKey String     @db.VarChar(120)
+  createdAt DateTime   @default(now()) @db.Timestamptz(3)
+  idea      LegacyIdea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+
+  @@unique([ideaId, dedupeKey])
+  @@index([ideaId, createdAt])
+}
+
+model StructuredRegistration {
+  id                  String                       @id @db.Uuid
+  userId              String                       @db.Uuid
+  schemaVersion       Int                          @default(1)
+  status              StructuredRegistrationStatus @default(draft)
+  step                String                       @db.VarChar(32)
+  activeFlow          String                       @db.VarChar(32)
+  data                Json
+  submittedAt         DateTime?                    @db.Timestamptz(3)
+  createdAt           DateTime                     @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                     @updatedAt @db.Timestamptz(3)
+  user                User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slot                UserIdeaSlot?
+  workbooks           WorkbookProgress[]
+  scoreAwards         StructuredScoreAward[]
+  mentorConversations MentorConversation[]
+
+  @@index([userId, updatedAt])
+  @@index([status, submittedAt])
+  @@unique([id, userId])
+}
+
+model WorkbookProgress {
+  id             String                  @id @db.Uuid
+  registrationId String                  @db.Uuid
+  schemaVersion  Int                     @default(1)
+  flow           WorkbookFlow
+  status         WorkbookStatus          @default(locked)
+  step           String                  @db.VarChar(8)
+  answers        Json                    @default("{}")
+  followups      Json                    @default("{}")
+  updatedAt      DateTime                @updatedAt @db.Timestamptz(3)
+  registration   StructuredRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@unique([registrationId, flow])
+  @@index([registrationId, status])
+}
+
+model StructuredScoreAward {
+  id             String                  @id @db.Uuid
+  registrationId String                  @db.Uuid
+  awardKey       String                  @db.VarChar(100)
+  amount         Int
+  createdAt      DateTime                @default(now()) @db.Timestamptz(3)
+  registration   StructuredRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@unique([registrationId, awardKey])
+  @@index([registrationId, createdAt])
+}
+
+model MentorConversation {
+  id             String                  @id @db.Uuid
+  userId         String                  @db.Uuid
+  legacyIdeaId   String?                 @db.Uuid
+  registrationId String?                 @db.Uuid
+  purpose        String                  @db.VarChar(40)
+  schemaVersion  Int                     @default(1)
+  createdAt      DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime                @updatedAt @db.Timestamptz(3)
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  legacyIdea     LegacyIdea?             @relation(fields: [legacyIdeaId, userId], references: [id, userId], onDelete: Cascade)
+  registration   StructuredRegistration? @relation(fields: [registrationId, userId], references: [id, userId], onDelete: Cascade)
+  messages       MentorMessage[]
+
+  @@index([userId, updatedAt])
+  @@index([legacyIdeaId, createdAt])
+  @@index([registrationId, createdAt])
+}
+
+model MentorMessage {
+  id             String            @id @db.Uuid
+  conversationId String            @db.Uuid
+  position       Int
+  role           MentorMessageRole
+  content        String
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
+  conversation   MentorConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, position])
+  @@index([conversationId, createdAt])
+}
+
+model AuditEvent {
+  id            String   @id @db.Uuid
+  actorUserId   String?  @db.Uuid
+  subjectUserId String?  @db.Uuid
+  action        String   @db.VarChar(100)
+  entityType    String   @db.VarChar(80)
+  entityId      String?  @db.VarChar(100)
+  requestId     String?  @db.VarChar(100)
+  metadata      Json?
+  occurredAt    DateTime @default(now()) @db.Timestamptz(3)
+  actor         User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  subject       User?    @relation("AuditSubject", fields: [subjectUserId], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt])
+  @@index([actorUserId, occurredAt])
+  @@index([subjectUserId, occurredAt])
+  @@index([entityType, entityId])
+}

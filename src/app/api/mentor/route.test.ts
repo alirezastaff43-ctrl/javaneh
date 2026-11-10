@@ -2,6 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEVELOPMENT_AXES, INTAKE_AXES } from "@/lib/interviewer";
 import { GET, POST } from "./route";
 
+vi.mock("@/lib/auth", () => ({
+  getAuthenticatedUser: vi.fn().mockResolvedValue({
+    id: "00000000-0000-4000-8000-000000000001",
+    mobile: "+989121234567",
+    fullName: null,
+  }),
+  unauthorizedResponse: () => Response.json({ error: "unauthorized" }, { status: 401 }),
+}));
+
+vi.mock("@/lib/user-data", () => ({
+  loadUserData: vi.fn().mockResolvedValue({
+    version: 1,
+    state: { schemaVersion: 1, profile: null, ideas: [] },
+    registrations: [],
+  }),
+}));
+
 function requestBody(overrides: Record<string, unknown> = {}) {
   const axes = INTAKE_AXES;
   return {
@@ -64,7 +81,7 @@ describe("mentor explanation validation", () => {
 
   it("announces demo mode without exposing provider configuration", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "");
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/api/mentor"));
     const result = await response.json();
 
     expect(result).toEqual({ mode: "demo" });

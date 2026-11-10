@@ -7,7 +7,8 @@ import {
   deferSubmission,
   emptyState,
   hasCompletedDevelopment,
-  nleoveIdea,
+  normalizeState,
+  removeIdea,
   submitNow,
   type Idea,
 } from "./domain";
@@ -123,7 +124,15 @@ describe("demo domain rules", () => {
       ideas: [state.ideas[0], state.ideas[2]],
     });
     expect(removeIdea(state, "unknown")).toEqual(state);
-  });xr-1", 5).tttat(nfirmationDeadlineAt: "not-a-date",
+  });
+
+  it("normalizes invalid saved deadlines and dates", () => {
+    const invalidDeadline = normalizeState({
+      schemaVersion: 1,
+      ideas: [
+        idea({
+          status: "awaiting-confirmation",
+          confirmationDeadlineAt: "not-a-date",
           updatedAt: "also-not-a-date",
         }),
       ],

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+import { getApprovedProviderUrl } from "@/lib/internal-provider-url";
 
-const BINAVIRA_API = "https://binavira.ir/api";
-const BINAVIRA_FILES = "https://binavira.ir/files";
+const DEFAULT_BINAVIRA_API = "https://binavira.ir/api";
+const DEFAULT_BINAVIRA_FILES = "https://binavira.ir/files";
 const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
 const MAX_REQUEST_BYTES = MAX_AUDIO_BYTES + 1024 * 1024;
 const MAX_PROCESSING_MS = 45_000;
@@ -76,14 +78,36 @@ async function readTranscript(response: Response): Promise<string | null> {
   return new TextDecoder().decode(text).trim();
 }
 
-async function transcribeLongAudio(jobId: string, token: string) {
+function getSpeechProviderBases(): { api: string; files: string } | null {
+  const isProduction = process.env.NODE_ENV === "production";
+  const configuredApi = process.env.BINAVIRA_API_BASE_URL?.trim();
+  const configuredFiles = process.env.BINAVIRA_FILES_BASE_URL?.trim();
+  if (isProduction && (!configuredApi || !configuredFiles)) return null;
+
+  const api = getApprovedProviderUrl(configuredApi || DEFAULT_BINAVIRA_API);
+  const files = getApprovedProviderUrl(configuredFiles || DEFAULT_BINAVIRA_FILES);
+  if (!api || !files) return null;
+
+  return {
+    api: api.toString().replace(/\/+$/u, ""),
+    files: files.toString().replace(/\/+$/u, ""),
+  };
+}
+
+async function transcribeLongAudio(
+  jobId: string,
+  token: string,
+  apiBase: string,
+  filesBase: string,
+) {
   const deadline = Date.now() + MAX_PROCESSING_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     let statusResponse: Response;
     try {
-      statusResponse = await fetch(`${BINAVIRA_API}/stt/status`, {
+      statusResponse = await fetch(`${apiBase}/stt/status`, {
         method: "POST",
+        redirect: "error",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -112,8 +136,9 @@ async function transcribeLongAudio(jobId: string, token: string) {
     let transcriptResponse: Response;
     try {
       transcriptResponse = await fetch(
-        `${BINAVIRA_FILES}/stt-text/${encodeURIComponent(jobId)}.txt`,
+        `${filesBase}/stt-text/${encodeURIComponent(jobId)}.txt`,
         {
+          redirect: "error",
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
         },
@@ -150,11 +175,21 @@ async function transcribeLongAudio(jobId: string, token: string) {
 }
 
 export async function POST(request: Request) {
+  if (!(await getAuthenticatedUser(request))) return unauthorizedResponse();
+
   const token = process.env.BINAVIRA_API_TOKEN?.trim();
   if (!token)
     return failure(
       "speech_not_configured",
       "توکن گفتار به متن تنظیم نشده است. آن را در فایل تنظیمات محیط وارد کنید.",
+      503,
+    );
+
+  const providerBases = getSpeechProviderBases();
+  if (!providerBases)
+    return failure(
+      "speech_not_configured",
+      "سرویس گفتار به متن داخلی تنظیم نشده است.",
       503,
     );
 
@@ -190,8 +225,9 @@ export async function POST(request: Request) {
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${BINAVIRA_API}/stt`, {
+    upstream = await fetch(`${providerBases.api}/stt`, {
       method: "POST",
+      redirect: "error",
       headers: { Authorization: `Bearer ${token}` },
       body: upstreamForm,
       signal: AbortSignal.timeout(30_000),
@@ -209,7 +245,12 @@ export async function POST(request: Request) {
   if (typeof payload?.response === "string" && payload.response.trim())
     return NextResponse.json({ text: payload.response.trim() });
   if (typeof payload?.job_id === "string" && payload.job_id.trim())
-    return transcribeLongAudio(payload.job_id.trim(), token);
+    return transcribeLongAudio(
+      payload.job_id.trim(),
+      token,
+      providerBases.api,
+      providerBases.files,
+    );
   return failure(
     "invalid_speech_response",
     "پاسخ سرویس گفتار به متن قابل استفاده نبود.",

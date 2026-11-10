@@ -1,6 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
+vi.mock("@/lib/auth", () => ({
+  getAuthenticatedUser: vi.fn().mockResolvedValue({
+    id: "00000000-0000-4000-8000-000000000001",
+    mobile: "+989121234567",
+    fullName: null,
+  }),
+  unauthorizedResponse: () => Response.json({ error: "unauthorized" }, { status: 401 }),
+}));
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    formValidationLock: { findUnique: vi.fn().mockResolvedValue(null) },
+  },
+}));
+
 function post(overrides: Record<string, unknown> = {}) {
   return POST(
     new Request("http://localhost/api/mentor/moderate", {

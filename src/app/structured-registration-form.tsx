@@ -27,6 +27,7 @@ import {
   type WorkbookFollowup,
   type WorkbookFlow,
   type WorkbookListItem,
+  type WorkbookProgress,
 } from "@/lib/structured-registration";
 import { formatNumber, isPersianText, toPersianDigits } from "@/lib/locale";
 import {
@@ -59,7 +60,9 @@ type Props = {
   storageError: string;
   onChange: (registration: StructuredRegistration) => void;
   onBack: () => void;
-  onSubmit: (registration: StructuredRegistration) => void;
+  onSubmit: (
+    registration: StructuredRegistration,
+  ) => void | boolean | Promise<void | boolean>;
 };
 
 const otherOutcome = OUTCOMES[6];
@@ -1138,7 +1141,12 @@ export default function StructuredRegistrationForm({
 
     setError("");
     if (currentStep === "review") {
-      onSubmit({ ...registration, updatedAt: new Date().toISOString() });
+      const saved = await onSubmit({
+        ...registration,
+        updatedAt: new Date().toISOString(),
+      });
+      if (saved === false)
+        setError("ثبت نهایی روی سرور ذخیره نشد؛ اتصال را بررسی و دوباره تلاش کنید.");
       return;
     }
     const next = steps[stepIndex + 1];

@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
 import { isPersianText } from "@/lib/locale";
 import { redactPersonalData } from "@/lib/privacy";
 import { getProviderConfiguration } from "@/lib/provider";
+import { prisma } from "@/lib/prisma";
+import { loadUserData } from "@/lib/user-data";
+import { buildMentorContext } from "@/lib/mentor-context";
 
 const requestSchema = z
   .object({
@@ -49,7 +54,8 @@ const requestSchema = z
           })
           .strict(),
       )
-      .max(3),
+      .max(3)
+      .optional(),
   })
   .strict();
 
@@ -135,6 +141,55 @@ function failure(code: string, error: string, status: number) {
   return NextResponse.json({ code, error }, { status });
 }
 
+async function conversationResponse(
+  userId: string,
+  purpose: string,
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+  data: Record<string, unknown>,
+) {
+  const conversationId = randomUUID();
+  const reply =
+    typeof data.reply === "string" ? data.reply : JSON.stringify(data);
+  const persistedMessages = [
+    ...messages.slice(-31).map((message) => ({
+      role: message.role,
+      content: redactPersonalData(message.content),
+    })),
+    { role: "assistant" as const, content: redactPersonalData(reply) },
+  ];
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.mentorConversation.create({
+        data: {
+          id: conversationId,
+          userId,
+          purpose: purpose.slice(0, 40),
+        },
+      });
+      await tx.mentorMessage.createMany({
+        data: persistedMessages.map((message, position) => ({
+          id: randomUUID(),
+          conversationId,
+          position,
+          role: message.role,
+          content: message.content,
+        })),
+      });
+    });
+  } catch (error) {
+    console.error(
+      "[mentor-chat] conversation could not be persisted",
+      error instanceof Error ? error.name : "unknown",
+    );
+    return failure(
+      "conversation_persistence_failed",
+      "گفت‌وگو ذخیره نشد؛ کمی بعد دوباره تلاش کنید.",
+      503,
+    );
+  }
+  return NextResponse.json({ ...data, conversationId });
+}
+
 async function readBoundedBody(request: Request): Promise<string | null> {
   const contentLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES)
@@ -215,6 +270,9 @@ function responseMessage(
 }
 
 export async function POST(request: Request) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) return unauthorizedResponse();
+
   const rawBody = await readBoundedBody(request);
   if (rawBody === null)
     return failure(
@@ -252,7 +310,21 @@ export async function POST(request: Request) {
     );
   }
 
-  const sanitizedIdeas = parsed.data.ideas.map((idea) => ({
+  let ownedIdeas: ReturnType<typeof buildMentorContext>;
+  try {
+    ownedIdeas = buildMentorContext(await loadUserData(user.id));
+  } catch (error) {
+    console.error(
+      "[mentor-chat] owned user context could not be loaded",
+      error instanceof Error ? error.name : "unknown",
+    );
+    return failure(
+      "mentor_context_unavailable",
+      "اطلاعات ثبت‌شدهٔ شما برای منتور بارگذاری نشد؛ دوباره تلاش کنید.",
+      503,
+    );
+  }
+  const sanitizedIdeas = ownedIdeas.map((idea) => ({
     ...idea,
     title: redactPersonalData(idea.title),
     seed: redactPersonalData(idea.seed),
@@ -301,6 +373,7 @@ export async function POST(request: Request) {
   try {
     upstream = await fetch(providerResult.configuration.endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         Authorization: `Bearer ${providerResult.configuration.apiKey}`,
         "Content-Type": "application/json",
@@ -413,7 +486,7 @@ export async function POST(request: Request) {
       messages.length === 1 && !result.data.reply.startsWith("سلام")
         ? `${/می‌?خوام|می‌?خوای|چیه|چطوری|واسه|یه/u.test(messages[0].content) ? "سلام! خوش اومدی 🌱 " : "سلام، خوش آمدید 🌱 "}${result.data.reply}`
         : result.data.reply;
-    return NextResponse.json({
+    return conversationResponse(user.id, purpose, sanitizedMessages, {
       ...result.data,
       reply: redactPersonalData(firstReply),
       idea: redactPersonalData(result.data.idea),
@@ -449,7 +522,7 @@ export async function POST(request: Request) {
         "پاسخ منتور آماده نشد. دوباره تلاش کن.",
         502,
       );
-    return NextResponse.json({
+    return conversationResponse(user.id, purpose, sanitizedMessages, {
       ...result.data,
       reply: redactPersonalData(result.data.reply),
       questions: result.data.questions.map(({ question, explanation }) => ({
@@ -492,7 +565,7 @@ export async function POST(request: Request) {
         "پرسش بعدی آماده نشد. پاسخ شما ذخیره شده؛ دوباره تلاش کنید.",
         502,
       );
-    return NextResponse.json({
+    return conversationResponse(user.id, purpose, sanitizedMessages, {
       status: result.data.status,
       reply: redactPersonalData(result.data.reply),
       questions: result.data.questions.map(redactPersonalData),
@@ -520,10 +593,10 @@ export async function POST(request: Request) {
         "راهنمای منتور آماده نشد.",
         502,
       );
-    return NextResponse.json({
+    return conversationResponse(user.id, purpose, sanitizedMessages, {
       reflection: redactPersonalData(result.data.reflection),
       guidance: redactPersonalData(result.data.guidance),
     });
   }
-  return NextResponse.json({ reply });
+  return conversationResponse(user.id, purpose, sanitizedMessages, { reply });
 }

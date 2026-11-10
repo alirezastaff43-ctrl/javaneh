@@ -1,21 +1,14 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import {
   classifyDemoText,
   type ModerationInput,
 } from "./moderation";
 
-const STORAGE_KEY = "javaneh-form-validation-state";
 const CHANGE_EVENT = "javaneh-form-validation-state-change";
-const MAX_INVALID_ATTEMPTS = 3;
-const LOCK_DURATION_MS = 12 * 60 * 60 * 1000;
-
-type StoredState = {
-  invalidAttempts: number;
-  windowStartedAt: number;
-  lockedUntil: number;
-};
+const LOCK_MESSAGE =
+  "به‌دلیل چند پاسخ نامعتبر، تکمیل فرم تا ۱۲ ساعت محدود شده است.";
 
 export type FormLockState = {
   locked: boolean;
@@ -26,99 +19,56 @@ export type AnswerValidationResult =
   | { valid: true }
   | { valid: false; message: string; locked: boolean };
 
-let memoryState: StoredState = { invalidAttempts: 0, windowStartedAt: 0, lockedUntil: 0 };
-let cachedState: StoredState | null = null;
+let state: FormLockState = { locked: false, lockedUntil: 0 };
 const SERVER_LOCK_SNAPSHOT = "false:0";
 
-function readState(): StoredState {
-  if (cachedState) return cachedState;
-  if (typeof window === "undefined") return memoryState;
-
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed: unknown = JSON.parse(raw);
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        "invalidAttempts" in parsed &&
-        typeof parsed.invalidAttempts === "number" &&
-        "windowStartedAt" in parsed &&
-        typeof parsed.windowStartedAt === "number" &&
-        "lockedUntil" in parsed &&
-        typeof parsed.lockedUntil === "number"
-      ) {
-        memoryState = {
-          invalidAttempts: Math.max(0, Math.floor(parsed.invalidAttempts)),
-          windowStartedAt: Math.max(0, parsed.windowStartedAt),
-          lockedUntil: Math.max(0, parsed.lockedUntil),
-        };
-      }
-    }
-  } catch (error) {
-    console.error("Could not read form validation state.", error);
-  }
-
-  if (memoryState.lockedUntil > 0 && memoryState.lockedUntil <= Date.now())
-    memoryState = { invalidAttempts: 0, windowStartedAt: 0, lockedUntil: 0 };
-  if (
-    memoryState.windowStartedAt > 0 &&
-    Date.now() - memoryState.windowStartedAt >= LOCK_DURATION_MS
-  )
-    memoryState = { invalidAttempts: 0, windowStartedAt: 0, lockedUntil: 0 };
-  cachedState = memoryState;
-  return memoryState;
+function publish(next: FormLockState) {
+  state = next;
+  if (typeof window !== "undefined")
+    window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
-function saveState(next: StoredState): void {
-  memoryState = next;
-  cachedState = next;
-  if (typeof window === "undefined") return;
+export async function refreshFormLockState(): Promise<FormLockState> {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    const response = await fetch("/api/form-validation", { cache: "no-store" });
+    if (!response.ok) throw new Error("Could not load form lock state");
+    const payload: unknown = await response.json();
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      !("locked" in payload) ||
+      typeof payload.locked !== "boolean" ||
+      !("lockedUntil" in payload) ||
+      typeof payload.lockedUntil !== "number"
+    )
+      throw new Error("Invalid form lock response");
+    const next = { locked: payload.locked, lockedUntil: payload.lockedUntil };
+    publish(next);
+    return next;
   } catch (error) {
-    console.error("Could not persist form validation state.", error);
+    console.error("Could not load server form lock state.", error);
+    throw error;
   }
-  window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
 export function getFormLockState(): FormLockState {
-  const { lockedUntil } = readState();
-  return { locked: lockedUntil > Date.now(), lockedUntil };
+  if (state.locked && state.lockedUntil <= Date.now()) {
+    state = { locked: false, lockedUntil: 0 };
+    return state;
+  }
+  return state;
 }
 
 export function useFormLockState(): FormLockState {
   const subscribe = (listener: () => void) => {
     if (typeof window === "undefined") return () => {};
-    let expirationTimer: number | undefined;
-    const scheduleExpiration = () => {
-      window.clearTimeout(expirationTimer);
-      const { lockedUntil } = getFormLockState();
-      const delay = lockedUntil - Date.now();
-      if (delay > 0) {
-        expirationTimer = window.setTimeout(() => {
-          cachedState = null;
-          listener();
-        }, delay);
-      }
-    };
-    const handleChange = () => {
-      cachedState = null;
-      scheduleExpiration();
-      listener();
-    };
-    window.addEventListener(CHANGE_EVENT, handleChange);
-    window.addEventListener("storage", handleChange);
-    scheduleExpiration();
-    return () => {
-      window.clearTimeout(expirationTimer);
-      window.removeEventListener(CHANGE_EVENT, handleChange);
-      window.removeEventListener("storage", handleChange);
-    };
+    window.addEventListener(CHANGE_EVENT, listener);
+    void refreshFormLockState().catch(() => undefined);
+    return () => window.removeEventListener(CHANGE_EVENT, listener);
   };
   const snapshot = () => {
-    const lockState = getFormLockState();
-    return `${lockState.locked}:${lockState.lockedUntil}`;
+    const current = getFormLockState();
+    return `${current.locked}:${current.lockedUntil}`;
   };
   const lockSnapshot = useSyncExternalStore(
     subscribe,
@@ -126,43 +76,64 @@ export function useFormLockState(): FormLockState {
     () => SERVER_LOCK_SNAPSHOT,
   );
   const [locked, lockedUntil = "0"] = lockSnapshot.split(":");
+
+  useEffect(() => {
+    const until = Number(lockedUntil);
+    if (locked !== "true" || until <= Date.now()) return;
+    const timer = window.setTimeout(
+      () => void refreshFormLockState().catch(() => undefined),
+      until - Date.now(),
+    );
+    return () => window.clearTimeout(timer);
+  }, [locked, lockedUntil]);
+
   return { locked: locked === "true", lockedUntil: Number(lockedUntil) };
 }
 
-export function recordInvalidFormAnswer(message: string): AnswerValidationResult {
-  let current = readState();
-  if (current.lockedUntil > Date.now()) {
+export async function recordInvalidFormAnswer(
+  message: string,
+): Promise<AnswerValidationResult> {
+  try {
+    const response = await fetch("/api/form-validation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event: "invalid" }),
+    });
+    const payload: unknown = await response.json();
+    if (!response.ok || !payload || typeof payload !== "object")
+      throw new Error("Could not record invalid form answer");
+    if (
+      !("locked" in payload) ||
+      typeof payload.locked !== "boolean" ||
+      !("lockedUntil" in payload) ||
+      typeof payload.lockedUntil !== "number" ||
+      !("attemptsRemaining" in payload) ||
+      typeof payload.attemptsRemaining !== "number"
+    )
+      throw new Error("Invalid form lock response");
+    publish({
+      locked: payload.locked,
+      lockedUntil: payload.lockedUntil,
+    });
+    if (payload.locked)
+      return { valid: false, locked: true, message: LOCK_MESSAGE };
     return {
       valid: false,
-      locked: true,
-      message: "به‌دلیل چند پاسخ نامعتبر، تکمیل فرم تا ۱۲ ساعت محدود شده است.",
+      locked: false,
+      message: `${message} ${
+        payload.attemptsRemaining
+          ? `تعداد فرصت باقی‌مانده: ${payload.attemptsRemaining}.`
+          : "اگر پاسخ نامعتبر دیگری ثبت شود، تکمیل فرم تا ۱۲ ساعت محدود می‌شود."
+      }`,
     };
-  }
-  if (current.lockedUntil > 0) {
-    current = { invalidAttempts: 0, windowStartedAt: 0, lockedUntil: 0 };
-    saveState(current);
-  }
-  const now = Date.now();
-  if (!current.windowStartedAt || now - current.windowStartedAt >= LOCK_DURATION_MS)
-    current = { invalidAttempts: 0, windowStartedAt: now, lockedUntil: 0 };
-  const invalidAttempts = current.invalidAttempts + 1;
-  if (invalidAttempts > MAX_INVALID_ATTEMPTS) {
-    const lockedUntil = now + LOCK_DURATION_MS;
-    saveState({ invalidAttempts, windowStartedAt: current.windowStartedAt, lockedUntil });
+  } catch (error) {
+    console.error("Could not persist form validation state.", error);
     return {
       valid: false,
-      locked: true,
-      message: "بیش از سه پاسخ نامعتبر ثبت شد؛ تکمیل فرم تا ۱۲ ساعت محدود شده است.",
+      locked: false,
+      message: "وضعیت بررسی پاسخ در سرور ذخیره نشد؛ اتصال را بررسی و دوباره تلاش کنید.",
     };
   }
-
-  saveState({ invalidAttempts, windowStartedAt: current.windowStartedAt, lockedUntil: 0 });
-  const attemptsLeft = MAX_INVALID_ATTEMPTS - invalidAttempts;
-  return {
-    valid: false,
-    locked: false,
-    message: `${message} ${attemptsLeft ? `تعداد فرصت باقی‌مانده: ${attemptsLeft}.` : "اگر پاسخ نامعتبر دیگری ثبت شود، تکمیل فرم تا ۱۲ ساعت محدود می‌شود."}`,
-  };
 }
 
 export async function validateAnswerRelevance(
@@ -182,6 +153,14 @@ export async function validateAnswerRelevance(
       signal: AbortSignal.timeout(6000),
     });
     const payload: unknown = await response.json();
+    if (response.status === 423) {
+      const current = await refreshFormLockState();
+      return {
+        valid: false,
+        locked: true,
+        message: current.locked ? LOCK_MESSAGE : "تکمیل فرم موقتاً محدود شده است.",
+      };
+    }
     if (
       response.ok &&
       payload &&

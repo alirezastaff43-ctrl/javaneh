@@ -11,52 +11,26 @@ npm run dev
 
 Open the URL printed by Next.js (normally `http://localhost:3000`). Run `npm test`, `npm run typecheck`, `npm run lint`, and `npm run build` for checks.
 
-## Demo behavior and privacy
+## Authentication and privacy
 
-- The app works without credentials. Without a configured provider key, opening and follow-up questions use a personalized deterministic demo flow. Demo verification accepts any 4–8 digit number; no SMS is sent.
-- The national ID and mobile number are used only in transient form state during the simulated verification step. They are cleared after verification and are not persisted or sent to the mentor. Only a display name and verified flag are stored.
-- Ideas, answers, proposals, token history, and deadlines are stored in this browser's `localStorage` under a versioned schema. Structured-registration drafts and completed local registrations use a separate versioned key so they do not change the existing `Idea` schema. Data is not secure, backed up, shared across devices, or recoverable after browser storage is cleared. Avoid entering sensitive information.
-- Structured registration asks for a full name and province/city, with email, education, activity background, audience, and future-news preference optional. It does not ask for a mobile number, national ID, or verification code. Drafts are saved locally as entered; final confirmation means only that the browser stored the registration, not that it was sent to organizers or synchronized to an account.
-- The three-item limit is shared by ideas from either path and structured registrations, and applies to saved data in this browser only. Reliable per-person limits and cross-device identity require a future backend.
-- A deferred review uses a precise local 72-hour timestamp. The app checks expiry while open and on its next load; no background job runs while the browser is closed. Deferred submission is not delivered to event organizers.
-- Tokens are a deterministic, auditable demo contribution score, not an official event rubric, ranking, or guarantee.
+- `/register` and `/login` are separate OTP-based flows using Iranian mobile numbers. National ID is not collected. Production requires an internal SMS gateway; no fake-code fallback is enabled.
+- Ideas, registrations, workbook answers, score records, and conversations are stored in PostgreSQL and scoped to the verified account. The mentor reads form context from the database, not client-supplied summaries. Session cookies are secure, HttpOnly, SameSite=Lax, and backed by revocable database sessions.
+- Legacy demo drafts in browser storage are not imported automatically because they have no verified owner. See [docs/authentication.md](docs/authentication.md) and [docs/data-and-retention.md](docs/data-and-retention.md).
+- Tokens remain a deterministic contribution score, not an official event rubric, ranking, or guarantee.
 
-## Optional AI provider
+## Docker Deployment
 
-The provider adapter is server-side in `src/app/api/mentor/route.ts` and `src/app/api/mentor/opening/route.ts`; both use the same OpenAI-compatible provider configuration. The first question is generated from the participant's starting idea, and follow-up questions use the answers and conversation history. To use AvalAI, configure these server-only variables:
+Copy `.env.example` to `.env`, replace sample credentials and provider settings, then run:
 
-```env
-AVALAI_API_KEY=your-server-side-key
-AI_MODEL=gpt-5.6-luna
-AI_BASE_URL=https://api.avalai.ir/v1
+```bash
+docker compose config --quiet
+docker compose up --build -d
 ```
 
-For local development, paste your key into `AVALAI_API_KEY` in the ignored `.env.local` file at the project root, then restart `npm run dev`. Do not commit or share that file. For deployment, add the same variables through the hosting provider's server-side environment settings.
+The migration service completes before the app and deadline worker start. PostgreSQL has no published host port; the app binds to `127.0.0.1` for an approved TLS reverse proxy. Configure the proxy to preserve the public `Host` header and overwrite `X-Forwarded-Proto`; state-changing same-origin checks rely on these trusted headers. `/api/health/live` checks process liveness and `/api/health/ready` checks PostgreSQL readiness.
 
-The route calls `.../chat/completions` and sends AvalAI's `AVALAI_API_KEY` only to `api.avalai.ir`. `AI_MODEL` can be changed to any model available to your AvalAI account. For Google's Gemini OpenAI compatibility endpoint (not the native `generateContent` API), use `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) with:
+The role-protected management panel is available at `/admin`. The first owner is assigned only from an operator-controlled shell, after the target account has completed OTP verification; follow [docs/admin.md](docs/admin.md). Admin data access, personal-data views/exports, role changes, and account status changes are audited.
 
-```env
-GEMINI_API_KEY=your-server-side-key
-AI_MODEL=gemini-2.5-flash
-AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-```
+For builds without international access, point `NODE_IMAGE`, `POSTGRES_IMAGE`, and `NPM_REGISTRY` at approved internal mirrors. Use a BuildKit secret for private npm registry credentials. The app requires explicit AI and speech endpoints whose exact host authorities are listed in `INTERNAL_PROVIDER_ALLOWED_HOSTS`; known Gemini and OpenRouter endpoints are rejected in production. Confirm provider residency and contracts separately: an allowlist is not proof of data location. Never commit `.env` or put secrets in `NEXT_PUBLIC_*` variables.
 
-The legacy `AI_API_KEY` is also accepted for Gemini and OpenRouter. For OpenRouter, use:
-
-```env
-OPENROUTER_API_KEY=your-server-side-key
-AI_MODEL=google/gemma-4-26b-a4b-it:free
-AI_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_SITE_URL=https://your-public-site.example
-OPENROUTER_APP_NAME=Javaneh
-```
-
-`AI_MODEL` and `AI_BASE_URL` remain configurable. When neither is set, the route defaults to OpenRouter and its documented model. Provider-specific keys are selected by endpoint; for example, an OpenRouter key is never sent to AvalAI or Google. `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` are optional attribution metadata sent only to OpenRouter. Never prefix an API key with `NEXT_PUBLIC_` or commit it.
-
-The route bounds input and provider response sizes, validates the request and model output, and redacts personal data from participant-authored text before forwarding it. It makes at most three attempts for transient network failures, HTTP 500/502/503/504, and HTTP 429; retries use jittered backoff and honor `Retry-After` when supplied. Each attempt has a 17-second timeout within a 55-second total request budget. Permanent HTTP 400/401/403 failures are not retried. Provider diagnostics are bounded and redact credentials and personal identifiers; provider details and credentials are not returned to the browser. The UI keeps the saved answer and provides actionable failure messages. Demo mode is used when no provider key is configured.
-
-## Deploy to Vercel
-
-Import the repository into Vercel and deploy with the default Next.js settings. No database or environment variables are required for demo mode. Add the optional provider variables in Vercel's server-side project environment settings only if a provider is configured.
-
-Before a real public launch, add a durable backend for identity and verification, private storage and retention controls, server-enforced idea limits, authorized submission delivery, abuse protection, and a durable deadline scheduler. Review data protection and event consent requirements; browser-local demo storage is not an account system.
+Set `AUTH_OTP_SECRET`, `SMS_PROVIDER_URL`, and `SMS_PROVIDER_API_KEY` before production. The SMS endpoint must be internal and its exact authority must be approved in `INTERNAL_PROVIDER_ALLOWED_HOSTS`. Local OTP testing without a gateway is available only when `AUTH_OTP_DEBUG=true` in non-production. GitHub Actions runs Prisma validation and migrations against PostgreSQL, tests, lint, typecheck, and build; it does not publish or deploy images. See the retention document before production approval; its durations are proposed defaults, not legal advice.

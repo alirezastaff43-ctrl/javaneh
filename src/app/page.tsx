@@ -18,6 +18,7 @@ import {
   Info,
   Lightbulb,
   LockKeyhole,
+  LogOut,
   MessageCircle,
   Plus,
   BarChart3,
@@ -38,7 +39,6 @@ import {
   formatDate,
   formatNumber,
   isPersianText,
-  normalizeDigits,
   toPersianDigits,
 } from "@/lib/locale";
 import {
@@ -54,13 +54,10 @@ import {
   hasCompletedDevelopment,
   normalizeState,
   removeIdea,
-  SCHEMA_VERSION,
-  STORAGE_KEY,
   type AppState,
   type Idea,
 } from "@/lib/domain";
 import {
-  STRUCTURED_STORAGE_KEY,
   structuredScore,
   createStructuredDraft,
   normalizeRegistrationStore,
@@ -75,8 +72,6 @@ type Screen =
   | "home"
   | "idea-mentor"
   | "structured"
-  | "details"
-  | "verify"
   | "dashboard";
 type MentorChatMessage = {
   role: "user" | "assistant";
@@ -172,6 +167,12 @@ export default function Home() {
   const stateRef = useRef(state);
   const [registrations, setRegistrations] = useState<StructuredRegistration[]>([]);
   const registrationsRef = useRef(registrations);
+  const dataVersionRef = useRef(0);
+  const saveInFlightRef = useRef(false);
+  const saveQueuedRef = useRef(false);
+  const savePromiseRef = useRef<Promise<boolean> | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const lastSavedSnapshotRef = useRef("");
   const [activeRegistration, setActiveRegistration] = useState<StructuredRegistration | null>(null);
   const structuredReturnScreenRef = useRef<Screen>("home");
   function commitState(
@@ -194,17 +195,10 @@ export default function Home() {
       : [...registrationsRef.current, updated];
     commitRegistrations(nextRecords);
     setActiveRegistration(updated);
-    try {
-      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
-      setStorageError("");
-    } catch {
-      setStorageError(
-        "پیش‌نویس ثبت نشد؛ دوباره تلاش کنید.",
-      );
-    }
+    setStorageError("");
   }
 
-  function submitRegistration(updated: StructuredRegistration): boolean {
+  async function submitRegistration(updated: StructuredRegistration): Promise<boolean> {
     const submitted = {
       ...updated,
       status: "submitted" as const,
@@ -217,18 +211,11 @@ export default function Home() {
       },
     };
     const nextRecords = registrationsRef.current.map((item) => item.id === submitted.id ? submitted : item);
-    try {
-      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
-    } catch {
-      setStorageError(
-        "ثبت نهایی انجام نشد؛ دوباره تلاش کنید.",
-      );
-      return false;
-    }
     commitRegistrations(nextRecords);
     setActiveRegistration(submitted);
     setStorageError("");
-    return true;
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    return saveAccountData();
   }
 
   function startStructuredRegistration(initialIdea: string) {
@@ -248,14 +235,7 @@ export default function Home() {
     commitRegistrations(nextRecords);
     setActiveRegistration(draft);
     setFormError("");
-    try {
-      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
-      setStorageError("");
-    } catch {
-      setStorageError(
-        "پیش‌نویس ثبت نشد؛ دوباره تلاش کنید.",
-      );
-    }
+    setStorageError("");
     setScreen("structured");
   }
 
@@ -264,9 +244,18 @@ export default function Home() {
     setActiveRegistration(registration);
     setScreen("structured");
   }
+  async function logout() {
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("logout failed");
+      window.location.replace("/login");
+    } catch {
+      setStorageError("خروج از حساب انجام نشد؛ اتصال را بررسی کنید.");
+    }
+  }
   const [ready, setReady] = useState(false);
+  const [accountLoaded, setAccountLoaded] = useState(false);
   const [screen, setScreen] = useState<Screen>("home");
-  const signupDestinationRef = useRef<"idea-mentor" | null>(null);
   const [infoDialog, setInfoDialog] = useState<"mentor" | "about" | null>(null);
   const infoDialogTriggerRef = useRef<HTMLButtonElement>(null);
   const infoDialogRef = useRef<HTMLElement>(null);
@@ -312,12 +301,6 @@ export default function Home() {
   const [seedSpeechBusy, setSeedSpeechBusy] = useState(false);
   const seedInputRef = useRef<HTMLTextAreaElement>(null);
   const [formError, setFormError] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [nationalId, setNationalId] = useState("");
-  const [mobile, setMobile] = useState("");
-  const [maskedMobile, setMaskedMobile] = useState("");
-  const [code, setCode] = useState("");
   const [mentorChatMessages, setMentorChatMessages] = useState<
     MentorChatMessage[]
   >([
@@ -348,45 +331,165 @@ export default function Home() {
   const ideaMentorEndRef = useRef<HTMLDivElement>(null);
   const ideaMentorInputRef = useRef<HTMLTextAreaElement>(null);
   const [storageError, setStorageError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [adminAvailable, setAdminAvailable] = useState(false);
+  const saveAccountDataRef = useRef<() => Promise<boolean>>(async () => false);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      const parsed = saved ? normalizeState(JSON.parse(saved)) : emptyState();
-      const transitioned = applyDeadlineTransitions(parsed);
-      commitState(transitioned);
-      if (saved && JSON.stringify(parsed) !== JSON.stringify(transitioned))
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(transitioned));
-    } catch {
-      commitState(emptyState());
-      setStorageError(
-        "بارگذاری اطلاعات با مشکل روبه‌رو شد. صفحه را دوباره بارگذاری کنید.",
-      );
+    let active = true;
+    async function loadAccountData() {
+      try {
+        const sessionResponse = await fetch("/api/auth/session", {
+          cache: "no-store",
+        });
+        if (!sessionResponse.ok) {
+          window.location.replace("/login");
+          return;
+        }
+        const sessionPayload: unknown = await sessionResponse.json();
+        if (
+          sessionPayload &&
+          typeof sessionPayload === "object" &&
+          "roles" in sessionPayload &&
+          Array.isArray(sessionPayload.roles)
+        )
+          setAdminAvailable(
+            sessionPayload.roles.some((role) =>
+              ["platform_owner", "registration_manager", "support", "analyst", "read_only"].includes(
+                String(role),
+              ),
+            ),
+          );
+        const response = await fetch("/api/data", { cache: "no-store" });
+        if (response.status === 401) {
+          window.location.replace("/login");
+          return;
+        }
+        if (!response.ok) throw new Error("account data unavailable");
+        const payload: unknown = await response.json();
+        if (
+          !payload ||
+          typeof payload !== "object" ||
+          !("state" in payload) ||
+          !("registrations" in payload) ||
+          !("version" in payload) ||
+          !Array.isArray(payload.registrations) ||
+          typeof payload.version !== "number"
+        )
+          throw new Error("invalid account data response");
+        const loadedState = normalizeState(payload.state);
+        const transitioned = applyDeadlineTransitions(loadedState);
+        const loadedRegistrations = normalizeRegistrationStore(payload.registrations);
+        if (!active) return;
+        dataVersionRef.current = payload.version;
+        commitState(transitioned);
+        commitRegistrations(loadedRegistrations);
+        lastSavedSnapshotRef.current = JSON.stringify({
+          state: loadedState,
+          registrations: loadedRegistrations,
+        });
+        setAccountLoaded(true);
+      } catch {
+        if (active)
+          setStorageError(
+            "اطلاعات از سرور بارگذاری نشد. اتصال را بررسی و صفحه را دوباره بارگذاری کنید.",
+          );
+      } finally {
+        if (active) setReady(true);
+      }
     }
-    try {
-      const savedRegistrations = localStorage.getItem(STRUCTURED_STORAGE_KEY);
-      const parsedRegistrations = savedRegistrations
-        ? normalizeRegistrationStore(JSON.parse(savedRegistrations))
-        : [];
-      commitRegistrations(parsedRegistrations);
-    } catch {
-      setStorageError(
-        "پیش‌نویس‌های ثبت ایده بارگذاری نشدند. دوباره تلاش کنید.",
-      );
-    }
-    setReady(true);
+    void loadAccountData();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      setStorageError(
-        "تغییرات ثبت نشدند؛ دوباره تلاش کنید.",
-      );
+    if (!ready || !accountLoaded) return;
+    const signature = JSON.stringify({
+      state,
+      registrations,
+    });
+    if (signature === lastSavedSnapshotRef.current) return;
+    setSaving(true);
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      void saveAccountDataRef.current();
+    }, 650);
+    return () => {
+      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [state, registrations, ready, accountLoaded]);
+
+  async function saveAccountData(): Promise<boolean> {
+    if (saveInFlightRef.current) {
+      saveQueuedRef.current = true;
+      return savePromiseRef.current ?? false;
     }
-  }, [state, ready]);
+    saveAccountDataRef.current = saveAccountData;
+    saveInFlightRef.current = true;
+    setSaving(true);
+    setStorageError("");
+    const operation = async () => {
+      do {
+        saveQueuedRef.current = false;
+        const snapshot = {
+          state: stateRef.current,
+          registrations: registrationsRef.current,
+        };
+        const signature = JSON.stringify(snapshot);
+        try {
+          const response = await fetch("/api/data", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              version: dataVersionRef.current,
+              ...snapshot,
+            }),
+          });
+          const payload: unknown = await response.json();
+          if (!response.ok) {
+            saveQueuedRef.current = false;
+            const errorMessage =
+              payload &&
+              typeof payload === "object" &&
+              "error" in payload &&
+              typeof payload.error === "string"
+                ? payload.error
+                : "ذخیرهٔ اطلاعات انجام نشد؛ دوباره تلاش کنید.";
+            setStorageError(errorMessage);
+            return false;
+          }
+          if (
+            !payload ||
+            typeof payload !== "object" ||
+            !("version" in payload) ||
+            typeof payload.version !== "number"
+          )
+            throw new Error("invalid save response");
+          dataVersionRef.current = payload.version;
+          lastSavedSnapshotRef.current = signature;
+        } catch {
+          setStorageError(
+            "اتصال به سرور برقرار نشد؛ تغییرات ذخیره نشده‌اند.",
+          );
+          return false;
+        }
+      } while (saveQueuedRef.current);
+      return true;
+    };
+    const pending = operation().finally(() => {
+      saveInFlightRef.current = false;
+      savePromiseRef.current = null;
+      setSaving(false);
+      if (saveQueuedRef.current) {
+        saveQueuedRef.current = false;
+        void saveAccountData();
+      }
+    });
+    savePromiseRef.current = pending;
+    return pending;
+  }
 
   useEffect(() => {
     mentorChatEndRef.current?.scrollIntoView({
@@ -446,16 +549,6 @@ export default function Home() {
       return;
 
     const nextState = removeIdea(stateRef.current, idea.id);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-    } catch {
-      setFormError("ایده حذف نشد؛ دوباره تلاش کنید.");
-      setStorageError(
-        "حذف ایده با مشکل روبه‌رو شد؛ دوباره تلاش کنید.",
-      );
-      return;
-    }
-
     commitState(nextState);
     setFormError("");
   }
@@ -474,16 +567,6 @@ export default function Home() {
     const nextRecords = registrationsRef.current.filter(
       (item) => item.id !== registration.id,
     );
-    try {
-      localStorage.setItem(STRUCTURED_STORAGE_KEY, JSON.stringify(nextRecords));
-    } catch {
-      setFormError("ثبت حذف نشد؛ دوباره تلاش کنید.");
-      setStorageError(
-        "حذف ثبت با مشکل روبه‌رو شد؛ دوباره تلاش کنید.",
-      );
-      return;
-    }
-
     commitRegistrations(nextRecords);
     if (activeRegistration?.id === registration.id) {
       setActiveRegistration(null);
@@ -509,56 +592,6 @@ export default function Home() {
       textarea.style.overflowY = textarea.scrollHeight > 240 ? "auto" : "hidden";
       textarea.setSelectionRange(nextSeed.length, nextSeed.length);
     });
-  }
-
-  function submitDetails(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const digits = normalizeDigits(mobile).replace(/\D/g, "");
-    const identityDigits = normalizeDigits(nationalId).replace(/\D/g, "");
-    if (!firstName.trim() || !lastName.trim()) {
-      setFormError("نام و نام خانوادگی‌تان را وارد کنید.");
-      return;
-    }
-    if (identityDigits.length < 6 || identityDigits.length > 20) {
-      setFormError("کد ملی باید بین ۶ تا ۲۰ رقم داشته باشد.");
-      return;
-    }
-    if (digits.length < 8 || digits.length > 15) {
-      setFormError("شمارهٔ همراه باید بین ۸ تا ۱۵ رقم داشته باشد.");
-      return;
-    }
-    setMaskedMobile(
-      `${digits.slice(0, 2)}••••••${digits.slice(-2)}`,
-    );
-    setFormError("");
-    setScreen("verify");
-  }
-
-  function verifyCode(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!/^\d{4,8}$/.test(normalizeDigits(code))) {
-      setFormError("برای ادامه، عددی ۴ تا ۸ رقمی وارد کنید.");
-      return;
-    }
-    if (signupDestinationRef.current !== "idea-mentor") {
-      setScreen("home");
-      return;
-    }
-    signupDestinationRef.current = null;
-    commitState((current) => ({
-      ...current,
-      schemaVersion: SCHEMA_VERSION,
-      profile: {
-        name: `${firstName.trim()} ${lastName.trim()}`,
-        verified: true,
-      },
-    }));
-    setNationalId("");
-    setMobile("");
-    setMaskedMobile("");
-    setCode("");
-    setFormError("");
-    startIdeaMentor();
   }
 
   async function sendMentorChatMessage(message = mentorChatDraft) {
@@ -744,12 +777,6 @@ export default function Home() {
       return;
     }
     setFormError("");
-    if (!stateRef.current.profile?.verified) {
-      signupDestinationRef.current = "idea-mentor";
-      setScreen("details");
-      return;
-    }
-    signupDestinationRef.current = null;
     setIdeaMentorMessages([]);
     setIdeaMentorStage("conversation");
     setIdeaMentorIdea("");
@@ -786,6 +813,20 @@ export default function Home() {
       </main>
     );
 
+  if (!accountLoaded)
+    return (
+      <main className="loading-screen" role="alert">
+        <span className="loading-mark">
+          <CircleHelp size={24} aria-hidden="true" />
+        </span>
+        <h1>اطلاعات بارگذاری نشد</h1>
+        <p>{storageError || "اتصال به سرور را بررسی و دوباره تلاش کنید."}</p>
+        <button className="primary-button" onClick={() => window.location.reload()}>
+          تلاش دوباره
+        </button>
+      </main>
+    );
+
   if (formLockState.locked)
     return (
       <main className="loading-screen" role="alert">
@@ -803,7 +844,7 @@ export default function Home() {
 
   return (
     <main
-      className={`app-shell${screen === "home" ? " landing-shell" : screen === "dashboard" ? " dashboard-shell" : screen === "idea-mentor" ? " idea-mentor-shell" : ["details", "verify", "structured"].includes(screen) ? " glass-shell" : ""}`}
+      className={`app-shell${screen === "home" ? " landing-shell" : screen === "dashboard" ? " dashboard-shell" : screen === "idea-mentor" ? " idea-mentor-shell"       : screen === "structured" ? " glass-shell" : ""}`}
     >
       <header
         className={`topbar${screen === "home" ? " landing-topbar" : ""}`}
@@ -882,14 +923,20 @@ export default function Home() {
           </>
         ) : (
           <div className="topbar-right">
-            {state.profile?.verified && (
-              <button
-                className="text-button"
-                onClick={() => setScreen("dashboard")}
-              >
-                <BookOpenText size={17} /> ایده‌های من
-              </button>
+            {adminAvailable && (
+              <a className="text-button" href="/admin">
+                <ShieldCheck size={17} /> پنل مدیریت
+              </a>
             )}
+            <button
+              className="text-button"
+              onClick={() => setScreen("dashboard")}
+            >
+              <BookOpenText size={17} /> ایده‌های من
+            </button>
+            <button className="text-button" onClick={() => void logout()}>
+              <LogOut size={17} /> خروج
+            </button>
           </div>
         )}
       </header>
@@ -1253,6 +1300,11 @@ export default function Home() {
           <span>{storageError}</span>
         </p>
       )}
+      {!storageError && (
+        <p className="save-status" role="status" aria-live="polite">
+          {saving ? "در حال ذخیرهٔ تغییرات روی سرور…" : "اطلاعات این حساب روی سرور ذخیره می‌شود."}
+        </p>
+      )}
       {screen === "home" && (
         <section className="home-view">
           <div className="home-heading landing-heading" id="about">
@@ -1604,150 +1656,6 @@ export default function Home() {
             updatedAt: new Date().toISOString(),
           })}
         />
-      )}
-
-      {screen === "details" && (
-        <section className="form-view narrow-view details-view">
-          <button className="back-link" onClick={() => setScreen("home")}>
-            <ArrowLeft size={16} /> بازگشت به ایده
-          </button>
-          <div className="eyebrow">
-            <span className="eyebrow-line" />
-            پیش از شروع
-          </div>
-          <h1>
-            کمی دربارهٔ <em>شما</em>
-          </h1>
-          <p className="form-intro">
-            نام شما برای نمایش در نمایه استفاده می‌شود. شمارهٔ همراه و کد ملی فقط برای گذر از این مرحله درخواست می‌شوند.
-          </p>
-          <div className="privacy-panel">
-            <ShieldCheck size={19} />
-            <p>
-              <b>یادآوری حریم خصوصی</b>
-              <br />
-              پیامکی ارسال نمی‌شود و هیچ سرویس احراز هویتی فراخوانی نمی‌شود. کد ملی و شمارهٔ همراه شما نگهداری یا ارسال نمی‌شوند و پس از این مرحله کنار گذاشته می‌شوند. فقط نام و وضعیت عبور از این مرحله برای ادامه استفاده می‌شود.
-            </p>
-          </div>
-          <form className="details-form" onSubmit={submitDetails} noValidate>
-            <div className="field-row">
-              <label>
-                نام
-                <input
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  autoComplete="given-name"
-                  dir="auto"
-                  required
-                />
-              </label>
-              <label>
-                نام خانوادگی
-                <input
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  autoComplete="family-name"
-                  dir="auto"
-                  required
-                />
-              </label>
-            </div>
-            <label>
-              کد ملی
-              <input
-                value={toPersianDigits(nationalId)}
-                onChange={(e) =>
-                  setNationalId(
-                    normalizeDigits(e.target.value).replace(/\D/g, ""),
-                  )
-                }
-                inputMode="numeric"
-                autoComplete="off"
-                dir="ltr"
-                required
-                minLength={6}
-                maxLength={24}
-              />
-            </label>
-            <label>
-              شمارهٔ همراه
-              <input
-                value={toPersianDigits(mobile)}
-                onChange={(e) =>
-                  setMobile(normalizeDigits(e.target.value).replace(/\D/g, ""))
-                }
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                dir="ltr"
-                required
-              />
-            </label>
-            {formError && (
-              <p className="inline-error" role="alert">
-                {formError}
-              </p>
-            )}
-            <button className="primary-button" type="submit">
-              ادامه <ArrowRight size={18} />
-            </button>
-          </form>
-        </section>
-      )}
-
-      {screen === "verify" && (
-        <section className="form-view narrow-view verify-view">
-          <button
-            className="back-link"
-            onClick={() => {
-              setScreen("details");
-              setFormError("");
-            }}
-          >
-            <ArrowLeft size={16} /> بازگشت به اطلاعات
-          </button>
-          <div className="step-icon">
-            <ShieldCheck size={24} />
-          </div>
-          <div className="eyebrow">
-            <span className="eyebrow-line" />
-            تأیید این مرحله
-          </div>
-          <h1>
-            با کدی که <em>خودتان انتخاب می‌کنید</em> ادامه دهید
-          </h1>
-          <p className="form-intro">
-            پیامک واقعی ارسال نمی‌شود. برای ادامه، هر عددی بین ۴ تا ۸ رقم وارد کنید؛ این کد هویت شما را تأیید نمی‌کند.
-          </p>
-          <div className="masked-line">
-            شمارهٔ همراه <bdi dir="ltr">{toPersianDigits(maskedMobile)}</bdi>
-          </div>
-          <form className="details-form" onSubmit={verifyCode} noValidate>
-            <label htmlFor="verification-code">
-              کد ادامه
-              <input
-                id="verification-code"
-                value={toPersianDigits(code)}
-                onChange={(e) =>
-                  setCode(normalizeDigits(e.target.value).replace(/\D/g, "").slice(0, 8))
-                }
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="کد ۴ رقمی"
-                dir="ltr"
-                required
-              />
-            </label>
-            {formError && (
-              <p className="inline-error" role="alert">
-                {formError}
-              </p>
-            )}
-            <button className="primary-button" type="submit">
-              ادامه <ArrowRight size={18} />
-            </button>
-          </form>
-        </section>
       )}
 
       {screen === "dashboard" && (

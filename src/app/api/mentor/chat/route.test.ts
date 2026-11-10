@@ -1,5 +1,49 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getAuthenticatedUser } from "@/lib/auth";
 import { POST } from "./route";
+
+vi.mock("@/lib/auth", () => ({
+  getAuthenticatedUser: vi.fn().mockResolvedValue({
+    id: "00000000-0000-4000-8000-000000000001",
+    mobile: "+989121234567",
+    fullName: null,
+  }),
+  unauthorizedResponse: () => Response.json({ error: "unauthorized" }, { status: 401 }),
+}));
+
+vi.mock("@/lib/user-data", () => ({
+  loadUserData: vi.fn().mockResolvedValue({
+    version: 1,
+    state: {
+      schemaVersion: 1,
+      profile: { name: "کاربر", verified: true },
+      ideas: [{
+        id: "00000000-0000-4000-8000-000000000002",
+        title: "عنوان ذخیره‌شده در سرور",
+        seed: "مسئلهٔ ذخیره‌شده در سرور",
+        status: "initial",
+        stage: "initial",
+        answers: [{ section: "مسئله", question: "چه مسئله‌ای؟", answer: "پاسخ ذخیره‌شده", createdAt: "2026-01-01T00:00:00.000Z" }],
+        proposal: { راهکار: "متن ذخیره‌شده" },
+        tokens: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+    },
+    registrations: [],
+  }),
+}));
+
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({
+        mentorConversation: { create: vi.fn() },
+        mentorMessage: { createMany: vi.fn() },
+      }),
+    ),
+  },
+}));
 
 function providerResponse(content: string) {
   return Response.json({
@@ -33,7 +77,21 @@ describe("mentor chat route", () => {
     vi.unstubAllGlobals();
   });
 
-  it("responds in Persian with the registered idea context and redacted messages", async () => {
+  it("rejects unauthenticated mentor calls before loading data or contacting AI", async () => {
+    vi.mocked(getAuthenticatedUser).mockResolvedValueOnce(null);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await chatRequest({
+      messages: [{ role: "user", content: "دربارهٔ ایده‌ام بگو" }],
+      ideas: [],
+    });
+
+    expect(response.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the owner-scoped database context and redacts personal data", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       providerResponse("برای شروع، مسئله‌ای را که می‌خواهی حل کنی با یک نمونهٔ واقعی توضیح بده."),
     );
@@ -52,12 +110,14 @@ describe("mentor chat route", () => {
         },
       ],
     });
+
     const result = await response.json();
     const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
 
     expect(response.status).toBe(200);
     expect(result.reply).toContain("برای شروع");
-    expect(JSON.stringify(sentBody.messages)).toContain("دسترسی بهتر به بازار");
+    expect(JSON.stringify(sentBody.messages)).toContain("عنوان ذخیره‌شده در سرور");
+    expect(JSON.stringify(sentBody.messages)).not.toContain("دسترسی بهتر به بازار");
     expect(JSON.stringify(sentBody.messages)).not.toContain("test@example.com");
   });
 
@@ -174,7 +234,7 @@ describe("mentor chat route", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
+    expect(await response.json()).toMatchObject({
       status: "sufficient",
       reply: "پاسخت هدف و مسیر راهکار را روشن کرده است.",
       questions: [],
@@ -229,7 +289,7 @@ describe("mentor chat route", () => {
     const providerRequest = JSON.parse(fetchMock.mock.calls[0][1].body);
 
     expect(response.status).toBe(200);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       reflection: "برداشت من این است که سالمندان در رفت‌وآمد روزانه با دشواری روبه‌رو هستند.",
       guidance: "برای این سؤال، بگو در یک موقعیت مشخص چه تغییری زندگی روزمره‌شان را آسان‌تر می‌کند.",
     });

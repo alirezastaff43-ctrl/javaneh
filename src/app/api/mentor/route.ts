@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
 import { isPersianText } from "@/lib/locale";
 import { redactPersonalData } from "@/lib/privacy";
 import { getProviderConfiguration } from "@/lib/provider";
+import { loadUserData } from "@/lib/user-data";
+import { buildMentorContext } from "@/lib/mentor-context";
 import {
   axesForStage,
   createDemoDecision,
@@ -355,7 +358,8 @@ const SYSTEM_PROMPT = `تو راهنمایی همراه و حمایت‌گر ه�
 
 برای پرسش بعدی، nextSection باید یکی از محورهای واجد شرایط و پوشش‌نیافته باشد. nextQuestion باید دست‌کم یکی از عبارت‌های کانونی همان محور را داشته باشد، فارسی روشن، مرتبط، غیرخالی، حداکثر ۶۰۰ نویسه و دقیقاً یک پرسش باشد. پاسخ را تکرار نکن و چند درخواست را در یک پرسش نیاور. questionContext در صورت کمک، کوتاه و مرتبط باشد. اگر مرحله کامل است، nextSection، nextQuestion و questionContext را null قرار بده؛ در غیر این صورت stageComplete برابر false باشد. فقط یک JSON معتبر با همین کلیدها برگردان: mentorMessage، answerSufficient، stageComplete، coveredSections، nextSection، nextQuestion و questionContext.`;
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!(await getAuthenticatedUser(request))) return unauthorizedResponse();
   const providerResult = getProviderConfiguration();
   return NextResponse.json({
     mode:
@@ -367,6 +371,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) return unauthorizedResponse();
+
   let input: z.infer<typeof requestSchema>;
   try {
     const raw = await readBoundedBody(request);
@@ -394,6 +401,28 @@ export async function POST(request: Request) {
     );
 
   const interview = toInterviewRequest(input);
+  let registeredIdeas: ReturnType<typeof buildMentorContext>;
+  try {
+    registeredIdeas = buildMentorContext(await loadUserData(user.id)).map((idea) => ({
+      ...idea,
+      title: redactPersonalData(idea.title),
+      seed: redactPersonalData(idea.seed),
+      answers: idea.answers.map((answer) => ({
+        question: redactPersonalData(answer.question),
+        answer: redactPersonalData(answer.answer),
+      })),
+      proposal: idea.proposal.map((field) => ({
+        section: redactPersonalData(field.section),
+        text: redactPersonalData(field.text),
+      })),
+    }));
+  } catch (error) {
+    console.error(
+      "[interview] owned user context could not be loaded",
+      error instanceof Error ? error.name : "unknown",
+    );
+    return providerFailure("provider_unavailable", 503);
+  }
   const providerResult = getProviderConfiguration();
   if ("error" in providerResult) {
     if (providerResult.error === "missing_provider_key") {
@@ -428,6 +457,7 @@ export async function POST(request: Request) {
       try {
       upstream = await fetch(endpoint, {
         method: "POST",
+        redirect: "error",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
@@ -461,6 +491,7 @@ export async function POST(request: Request) {
               role: "user",
               content: JSON.stringify({
                 ...interview,
+                registeredIdeas,
                 responseLanguage: "Persian",
                 eligibleCoveredSections:
                   interview.stage === "development"
